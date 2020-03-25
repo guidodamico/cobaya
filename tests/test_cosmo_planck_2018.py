@@ -10,6 +10,7 @@ from cobaya.cosmo_input import cmb_precision
 # Generating plots in Travis
 try:
     import matplotlib
+
     matplotlib.use('agg')
 except:
     pass
@@ -34,6 +35,7 @@ def test_planck_2018_t_camb(modules):
     best_fit_derived = derived_lowl_highTT_lensing
     body_of_test(modules, best_fit, info_likelihood, info_theory,
                  chi2_lowl_highTT_lensing, best_fit_derived)
+
 
 def test_planck_2018_p_camb(modules):
     best_fit = deepcopy(params_lowTE_highTTTEEE_lensingcmblikes)
@@ -250,7 +252,6 @@ derived_lowl_highTT_lensing = {
     "thetaeq": [0.8255, 0.011],
     "thetarseq": [0.4557, 0.0057]}
 
-
 # Best fit polarization ##################################################################
 
 lik_info_lowTE_highTTTEEE_lensingcmblikes = {
@@ -262,7 +263,7 @@ chi2_lowTE_highTTTEEE_lensingcmblikes = {
     "planck_2018_highl_plik.TTTEEE": 2344.93, "planck_2018_lensing.native": 8.87,
     "tolerance": 0.11}
 
-chi2_planck_2018_plikHM_highTTTEEE_lite = 584.64
+chi2_planck_2018_plikHM_highTTTEEE_lite = 584.65
 
 params_lowTE_highTTTEEE_lite_lensingcmblikes = {
     # Sampled
@@ -324,13 +325,12 @@ derived_lowTE_highTTTEEE_lensingcmblikes = {
     "thetaeq": [0.81281, 0.0050],
     "thetarseq": [0.44912, 0.0026]}
 
-
 # Best fit CMB-marged lensing ############################################################
 
-lik_info_lensing_cmbmarged = {"planck_2018_lensing.cmbmarged": None}
+lik_info_lensing_cmbmarged = {"planck_2018_lensing.CMBMarged": None}
 
 chi2_lensing_cmbmarged = {
-    "planck_2018_lensing.cmbmarged": 7.51, "tolerance": 0.11}
+    "planck_2018_lensing.CMBMarged": 7.51, "tolerance": 0.11}
 
 params_lensing_cmbmarged = {
     "omegabh2": 2.2219050E-02,

@@ -11,23 +11,25 @@ Basically, a wrapper around a `pandas.DataFrame`.
 """
 
 # Python 2/3 compatibility
-from __future__ import absolute_import
-from __future__ import division
+from __future__ import absolute_import, division
 import six
+if six.PY2:
+    from io import open
 
 # Global
 import os
-from copy import deepcopy
 import logging
 import numpy as np
 import pandas as pd
 from getdist import MCSamples
+from collections import OrderedDict as odict
 
 # Local
 from cobaya.conventions import _weight, _chi2, _minuslogpost, _minuslogprior
 from cobaya.conventions import _separator
 from cobaya.tools import load_DataFrame
 from cobaya.log import LoggedError, HasLogger
+from cobaya.yaml import force_unicode
 
 # Suppress getdist output
 from getdist import chains
@@ -62,26 +64,34 @@ def check_slice(ij, imax):
     return slice(newlims["start"], newlims["stop"], ij.step)
 
 
-class Collection(HasLogger):
-
-    def __init__(self, model, output=None,
-                 initial_size=enlargement_size, name=None, extension=None, file_name=None,
-                 resuming=False, load=False, onload_skip=0, onload_thin=1):
+class BaseCollection(HasLogger):
+    def __init__(self, model, name=None):
         self.name = name
-        self.set_logger()
+        self.set_logger(name)
         self.sampled_params = list(model.parameterization.sampled_params())
         self.derived_params = list(model.parameterization.derived_params())
         self.minuslogprior_names = [
             _minuslogprior + _separator + piname for piname in list(model.prior)]
         self.chi2_names = [_chi2 + _separator + likname for likname in model.likelihood]
-        # Create the dataframe structure
         columns = [_weight, _minuslogpost]
         columns += list(self.sampled_params)
         # Just in case: ignore derived names as likelihoods: would be duplicate cols
         columns += [p for p in self.derived_params if p not in self.chi2_names]
         columns += [_minuslogprior] + self.minuslogprior_names
         columns += [_chi2] + self.chi2_names
+        self.columns = columns
+
+
+class Collection(BaseCollection):
+
+    def __init__(self, model, output=None,
+                 initial_size=enlargement_size, name=None, extension=None, file_name=None,
+                 resuming=False, load=False, onload_skip=0, onload_thin=1):
+
+        super(Collection, self).__init__(model, name)
+        self._value_dict = odict([(p, np.nan) for p in self.columns])
         # Create/load the main data frame and the tracking indices
+        # Create the dataframe structure
         if output:
             self.file_name, self.driver = output.prepare_collection(
                 name=self.name, extension=extension)
@@ -93,11 +103,11 @@ class Collection(HasLogger):
             if output:
                 try:
                     self._out_load(skip=onload_skip, thin=onload_thin)
-                    if set(self.data.columns) != set(columns):
+                    if set(self.data.columns) != set(self.columns):
                         raise LoggedError(
                             self.log,
                             "Unexpected column names!\nLoaded: %s\nShould be: %s",
-                            list(self.data.columns), columns)
+                            list(self.data.columns), self.columns)
                     self._n = self.data.shape[0]
                     self._n_last_out = self._n
                 except IOError:
@@ -109,11 +119,12 @@ class Collection(HasLogger):
                     elif load:
                         raise
             else:
-                raise LoggedError(self.log, "No continuation possible if there is no output.")
+                raise LoggedError(self.log,
+                                  "No continuation possible if there is no output.")
         else:
             self._out_delete()
         if not resuming and not load:
-            self.reset(columns=columns, index=range(initial_size))
+            self.reset(columns=self.columns, index=range(initial_size))
             # TODO: the following 2 lines should go into the `reset` method.
             if output:
                 self._n_last_out = 0
@@ -130,37 +141,43 @@ class Collection(HasLogger):
     def add(self,
             values, derived=None, weight=1, logpost=None, logpriors=None, loglikes=None):
         self._enlarge_if_needed()
-        self.data.at[self._n, _weight] = weight
+        self._add_dict(self._value_dict, values, derived, weight, logpost, logpriors,
+                       loglikes)
+        self.data.iloc[self._n] = np.array(list(self._value_dict.values()))
+        self._n += 1
+
+    def _add_dict(self, dic, values, derived=None, weight=1, logpost=None, logpriors=None,
+                  loglikes=None):
+        dic[_weight] = weight
         if logpost is None:
             try:
                 logpost = sum(logpriors) + sum(loglikes)
             except ValueError:
                 raise LoggedError(
                     self.log, "If a log-posterior is not specified, you need to pass "
-                    "a log-likelihood and a log-prior.")
-        self.data.at[self._n, _minuslogpost] = -logpost
+                              "a log-likelihood and a log-prior.")
+        dic[_minuslogpost] = -logpost
         if logpriors is not None:
             for name, value in zip(self.minuslogprior_names, logpriors):
-                self.data.at[self._n, name] = -value
-            self.data.at[self._n, _minuslogprior] = -sum(logpriors)
+                dic[name] = -value
+            dic[_minuslogprior] = -sum(logpriors)
         if loglikes is not None:
             for name, value in zip(self.chi2_names, loglikes):
-                self.data.at[self._n, name] = -2 * value
-            self.data.at[self._n, _chi2] = -2 * sum(loglikes)
+                dic[name] = -2 * value
+            dic[_chi2] = -2 * sum(loglikes)
         if len(values) != len(self.sampled_params):
             raise LoggedError(
                 self.log, "Got %d values for the sampled parameters. Should be %d.",
                 len(values), len(self.sampled_params))
         for name, value in zip(self.sampled_params, values):
-            self.data.at[self._n, name] = value
+            dic[name] = value
         if derived is not None:
             if len(derived) != len(self.derived_params):
                 raise LoggedError(
-                    self.log, "Got %d values for the dervied parameters. Should be %d.",
+                    self.log, "Got %d values for the derived parameters. Should be %d.",
                     len(derived), len(self.derived_params))
             for name, value in zip(self.derived_params, derived):
-                self.data.at[self._n, name] = value
-        self._n += 1
+                dic[name] = value
 
     def _enlarge_if_needed(self):
         if self._n >= self.data.shape[0]:
@@ -170,7 +187,8 @@ class Collection(HasLogger):
                 enlarge_by = enlargement_size
             self.data = pd.concat([
                 self.data, pd.DataFrame(np.nan, columns=self.data.columns,
-                                        index=np.arange(self.n(), self.n() + enlarge_by))])
+                                        index=np.arange(self.n(),
+                                                        self.n() + enlarge_by))])
 
     def _append(self, collection):
         """
@@ -314,14 +332,14 @@ class Collection(HasLogger):
         self._n_last_out = n_max
         n_float = 8
         do_header = not n_min
-        with open(self.file_name, "a") as out:
+        with open(self.file_name, "a", encoding="utf-8") as out:
             lines = self.data[n_min:n_max].to_string(
                 header=do_header, index=False, na_rep="nan", justify="right",
                 float_format=(lambda x: ("%%.%dg" % n_float) % x))
             # if header, add comment marker by hand (messes with align if auto)
             if do_header:
                 lines = "#" + (lines[1:] if lines[0] == " " else lines)
-            out.write(lines + "\n")
+            out.write(force_unicode(lines + "\n"))
 
     def _delete__txt(self):
         try:
@@ -340,6 +358,41 @@ class Collection(HasLogger):
         pass
 
 
+class OneSamplePoint:
+    """Wrapper to hold a single point, e.g. the current point of an MCMC."""
+
+    def __init__(self, model, output_thin=1):
+        self.sampled_params = list(model.parameterization.sampled_params())
+        self.output_thin = output_thin
+        self._added_weight = 0
+
+    def add(self, values, weight=1, **kwargs):
+        self.values = values
+        self.kwargs = kwargs
+        self.weight = weight
+
+    @property
+    def logpost(self):
+        return self.kwargs['logpost']
+
+    def add_to_collection(self, collection):
+        """Adds this point at the end of a given collection."""
+        if self.output_thin > 1:
+            self._added_weight += self.weight
+            if self._added_weight >= self.output_thin:
+                weight = self._added_weight // self.output_thin
+                self._added_weight = self._added_weight % self.output_thin
+            else:
+                return
+        else:
+            weight = self.weight
+        collection.add(self.values, weight=weight, **self.kwargs)
+
+    def __str__(self):
+        return ", ".join(
+            ['%s:%.7g' % (k, v) for k, v in zip(self.sampled_params, self.values)])
+
+
 class OnePoint(Collection):
     """Wrapper of Collection to hold a single point, e.g. the current point of an MCMC."""
 
@@ -352,7 +405,8 @@ class OnePoint(Collection):
             return self.data.values[0, self.data.columns.get_loc(columns)]
         else:
             try:
-                return self.data.values[0, [self.data.columns.get_loc(c) for c in columns]]
+                return self.data.values[
+                    0, [self.data.columns.get_loc(c) for c in columns]]
             except KeyError:
                 raise ValueError("Some of the indices are not valid columns.")
 
@@ -364,15 +418,6 @@ class OnePoint(Collection):
     def increase_weight(self, increase):
         # For some reason, faster than `self.data[_weight] += increase`
         self.data.at[0, _weight] += increase
-
-    def add_to_collection(self, collection):
-        """Adds this point at the end of a given collection."""
-        collection.add(
-            self[self.sampled_params],
-            derived=(self[self.derived_params] if self.derived_params else None),
-            logpost=-self[_minuslogpost], weight=self[_weight],
-            logpriors=-np.array(self[self.minuslogprior_names]),
-            loglikes=-0.5 * np.array(self[self.chi2_names]))
 
     # Restore original __repr__ (here, there is only 1 sample)
     def __repr__(self):

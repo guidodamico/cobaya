@@ -16,30 +16,33 @@ from copy import deepcopy
 from importlib import import_module
 import six
 import numpy as np  # don't delete: necessary for get_external_function
-import scipy.stats as stats  # don't delete: necessary for get_external_function
 import pandas as pd
 from collections import OrderedDict as odict
 from ast import parse
 import warnings
+import inspect
+from packaging import version
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore")
     # Suppress message about optional dependency
     from fuzzywuzzy import process as fuzzy_process
-if six.PY3:
-    from inspect import cleandoc, getfullargspec as getargspec
-    from math import gcd
-    from collections.abc import Mapping
-else:
+if not six.PY3:
     ModuleNotFoundError = ImportError
-    from inspect import cleandoc, getargspec
+    # noinspection PyUnresolvedReferences,PyDeprecation
+    from inspect import cleandoc, getargspec as getfullargspec
+    # noinspection PyDeprecation
     from fractions import gcd
     from collections import Mapping
+else:
+    from inspect import cleandoc, getfullargspec
+    from math import gcd
+    # noinspection PyCompatibility
+    from collections.abc import Mapping
 
 # Local
 from cobaya import __obsolete__
-from cobaya.conventions import _package, subfolders, _p_dist, _likelihood, _p_value
-from cobaya.conventions import _sampler, _theory
+from cobaya.conventions import _package, subfolders, partag, kinds
 from cobaya.log import LoggedError
 
 # Logger
@@ -48,44 +51,47 @@ import logging
 log = logging.getLogger(__name__.split(".")[-1])
 
 
-# Deepcopy workaround:
-def deepcopyfix(olddict):
-    if not hasattr(olddict, "keys"):
-        return deepcopy(olddict)
-    newdict = {}
-    for key in olddict:
-        if (key == 'theory' or key == 'instance' or key == 'external'):
-            newdict[key] = olddict[key]
+def str_to_list(x):
+    return [x] if isinstance(x, six.string_types) else x
+
+
+def change_key(info, old, new, value):
+    """
+    Change dictionary key without making new dict or changing order
+    :param info: dictionary
+    :param old: old key name
+    :param new: new key name
+    :param value: value for key
+    :return: info (same instance)
+    """
+    k = list(info.keys())
+    v = list(info.values())
+    info.clear()
+    for key, oldv in zip(k, v):
+        if key == old:
+            info[new] = value
         else:
-            # print(key)
-            newdict[key] = deepcopy(olddict[key])
-    return newdict
+            info[key] = oldv
+    return info
 
 
-def get_class_base_filename(name, kind):
+def get_internal_class_module(name, kind):
     """
-    Gets absoluate file base name for a class module, relative to the package source, of a likelihood, theory or sampler.
-    """
-    if '.' not in name: name += '.' + name
-    return os.path.join(os.path.dirname(__file__), subfolders[kind], name.replace('.', os.sep))
-
-
-def get_class_module(name, kind):
-    """
-    Gets qualified module name, relative to the package source, of a likelihood, theory or sampler.
+    Gets qualified name of internal module, relative to the package source,
+    of a likelihood, theory or sampler.
     """
     return '.' + subfolders[kind] + '.' + name
 
 
 def get_kind(name, fail_if_not_found=True):
     """
-    Given a hefully unique module name, tries to determine it's kind:
+    Given a helpfully unique module name, tries to determine it's kind:
     ``sampler``, ``theory`` or ``likelihood``.
     """
     try:
         return next(
-            k for k in [_sampler, _theory, _likelihood]
-            if name in get_available_modules(k))
+            k for k in kinds
+            if name in get_available_internal_class_names(k))
     except StopIteration:
         if fail_if_not_found:
             raise LoggedError(log, "Could not determine kind of module %s", name)
@@ -93,69 +99,178 @@ def get_kind(name, fail_if_not_found=True):
             return None
 
 
-def get_class(name, kind=None, None_if_not_found=False):
+class PythonPath:
     """
-    Retrieves the requested likelihood (default) or theory class.
+    A context that keeps sys.path unchanged, optionally adding path during the context.
+    """
 
-    ``info`` must be a dictionary of the kind ``{[class_name]: [options]}``.
+    def __init__(self, path=None, when=True):
+        self.path = path if when else None
 
-    Raises ``ImportError`` if class not found in the appropriate place in the source tree.
+    def __enter__(self):
+        self.old_path = sys.path[:]
+        if self.path:
+            sys.path.insert(0, os.path.abspath(self.path))
+        return self
 
-    If 'kind=None' is not given, tries to guess it if the module name is unique (slow!).
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.path[:] = self.old_path
+
+
+class VersionCheckError(ValueError):
+    pass
+
+
+def check_module_path(module, path):
+    if not os.path.realpath(os.path.abspath(module.__file__)).startswith(
+            os.path.realpath(os.path.abspath(path))):
+        raise LoggedError(
+            log, "Module %s successfully loaded, but not from requested path: %s.",
+            module.__name__, path)
+
+
+def check_module_version(module, min_version):
+    if not hasattr(module, "__version__") or \
+            version.parse(module.__version__) < version.parse(min_version):
+        raise VersionCheckError(
+            "module %s at %s is version %s but required %s or higher" %
+            (module.__name__, os.path.dirname(module.__file__),
+             getattr(module, "__version__", "(non-given)"), min_version))
+
+
+def load_module(name, package=None, path=None, min_version=None, check_path=False):
+    with PythonPath(path):
+        module = import_module(name, package=package)
+    if path and check_path:
+        check_module_path(module, path)
+    if min_version:
+        check_module_version(module, min_version)
+    return module
+
+
+def get_class(name, kind=None, None_if_not_found=False, allow_external=True,
+              module_path=None, return_module=False):
+    """
+    Retrieves the requested class from its reference name. The name can be a
+    fully-qualified package.module.classname string, or an internal name of the particular
+    kind. If the last element of name is not a class, assume class has the same name and
+    is in that module.
+
+    By default tries to load internal modules first, then if that fails internal ones.
+    module_path can be used to specify a specific external location.
+
+    Raises ``ImportError`` if class not found in the appropriate place in the source tree
+    and is not a fully qualified external name.
+
+    If 'kind=None' is not given, tries to guess it if the name is unique (slow!).
+
+    If allow_external=True, allows loading explicit name from anywhere on path.
     """
     if kind is None:
         kind = get_kind(name)
-    class_name = name.split('.')[-1]
-    class_folder = get_class_module(name, kind)
+    if '.' in name:
+        module_name, class_name = name.rsplit('.', 1)
+    else:
+        allow_external = False
+        module_name = name
+        class_name = name
+
+    def get_return(_cls, _mod):
+        if return_module:
+            return _cls, _mod
+        else:
+            return _cls
+
+    def return_class(_module_name, package=None):
+        _module = load_module(_module_name, package=package, path=module_path)
+        if hasattr(_module, class_name):
+            cls = getattr(_module, class_name)
+        else:
+            _module = load_module(_module_name + '.' + class_name,
+                                  package=package, path=module_path)
+            cls = getattr(_module, class_name)
+        if not inspect.isclass(cls):
+            return get_return(getattr(cls, class_name), cls)
+        else:
+            return get_return(cls, _module)
+
     try:
-        return getattr(import_module(class_folder, package=_package), class_name)
+        if module_path:
+            return return_class(module_name)
+        else:
+            internal_module = get_internal_class_module(module_name, kind)
+            return return_class(internal_module, package=_package)
     except:
-        if ((sys.exc_info()[0] is ModuleNotFoundError and
-             str(sys.exc_info()[1]).rstrip("'").endswith(name))):
+        exc_info = sys.exc_info()
+        if allow_external and not module_path:
+            try:
+                import_module(module_name)
+            except Exception:
+                pass
+            else:
+                try:
+                    return return_class(module_name)
+                except:
+                    exc_info = sys.exc_info()
+
+        if ((exc_info[0] is ModuleNotFoundError and
+             str(exc_info[1]).rstrip("'").endswith(name))):
             if None_if_not_found:
-                return None
+                return get_return(None, None)
             raise LoggedError(
                 log, "%s '%s' not found. Maybe you meant one of the following "
-                "(capitalization is important!): %s",
+                     "(capitalization is important!): %s",
                 kind.capitalize(), name,
-                fuzzy_match(name, get_available_modules(kind), n=3))
+                fuzzy_match(name, get_available_internal_class_names(kind), n=3))
         else:
             log.error("There was a problem when importing %s '%s':", kind, name)
-            raise sys.exc_info()[1]
+            raise exc_info[1]
 
 
-def get_available_modules(kind):
+def import_all_classes(path, pkg, subclass_of, hidden=False, helpers=False):
+    import pkgutil
+    result = set()
+    from cobaya.theory import HelperTheory
+    for (module_loader, name, ispkg) in pkgutil.iter_modules([path]):
+        if hidden or not name.startswith('_'):
+            module_name = pkg + '.' + name
+            m = load_module(module_name)
+            for class_name, cls in inspect.getmembers(m, inspect.isclass):
+                if issubclass(cls, subclass_of) and \
+                        (helpers or not issubclass(cls, HelperTheory)) and \
+                        cls.__module__ == module_name:
+                    result.add(cls)
+            if ispkg:
+                result.update(import_all_classes(os.path.dirname(m.__file__), m.__name__,
+                                                 subclass_of, hidden))
+    return result
+
+
+def get_available_internal_classes(kind, hidden=False):
     """
-    Gets all modules' names of a given kind.
+    Gets all class names of a given kind.
     """
-    folders = sorted([
-        f for f in os.listdir(os.path.join(os.path.dirname(__file__), subfolders[kind]))
-        if (not f.startswith("_") and not f.startswith(".") and
-        os.path.isdir(os.path.join(os.path.dirname(__file__), subfolders[kind], f)))])
-    with_nested = []
-    for f in folders:
-        dotpy_files = sorted([
-            fi for fi in os.listdir(
-                os.path.join(os.path.dirname(__file__), subfolders[kind], f))
-            if fi.lower().endswith(".py")])
-        # if *non-empty* __init__, assume it containts a sigle module named as the folder
-        try:
-            __init__filename = next(
-                p for p in dotpy_files if os.path.splitext(p)[0] == "__init__")
-            __init__with_path = os.path.join(
-                os.path.dirname(__file__), subfolders[kind], f, __init__filename)
-        except:
-            __init__filename = None
-        if __init__filename and os.path.getsize(__init__with_path):
-            with_nested += [f]
-        else:
-            dotpy_files = [fi for fi in dotpy_files if not fi.startswith("_")]
-            with_nested += [f + "." +  os.path.splitext(dpyf)[0] for dpyf in dotpy_files
-                            if os.path.splitext(dpyf)[0] != f]
-    return with_nested
+
+    from cobaya.component import CobayaComponent
+    path = os.path.join(os.path.dirname(__file__), subfolders[kind])
+    return import_all_classes(path, 'cobaya.%s' % subfolders[kind], CobayaComponent,
+                              hidden)
 
 
-def get_external_function(string_or_function, name=None, or_class=False):
+def get_all_available_internal_classes(hidden=False):
+    result = set()
+    for classes in [get_available_internal_classes(k, hidden) for k in kinds]:
+        result.update(classes)
+    return result
+
+
+def get_available_internal_class_names(kind, hidden=False):
+    return sorted(set(
+        cls.get_qualified_class_name() for cls in
+        get_available_internal_classes(kind, hidden)))
+
+
+def get_external_function(string_or_function, name=None):
     """
     Processes an external prior or likelihood, given as a string or a function.
 
@@ -169,12 +284,15 @@ def get_external_function(string_or_function, name=None, or_class=False):
     Returns the function.
     """
     if hasattr(string_or_function, "keys"):
-        string_or_function = string_or_function.get(_p_value, None)
+        string_or_function = string_or_function.get(partag.value, None)
     if isinstance(string_or_function, six.string_types):
         try:
-            if "import_module" in string_or_function:
-                sys.path.append(os.path.realpath(os.curdir))
-            function = eval(string_or_function)
+            scope = globals()
+            import scipy.stats as stats  # provide default scope for eval
+            scope['stats'] = stats
+            scope['np'] = np
+            with PythonPath(os.curdir, when="import_module" in string_or_function):
+                function = eval(string_or_function, scope)
         except Exception as e:
             raise LoggedError(
                 log, "Failed to load external function%s: '%r'",
@@ -265,6 +383,9 @@ def load_DataFrame(file_name, skip=0, thin=1):
             inp.seek(0)
         thin = int(thin)
         skiprows = lambda i: i < skip or i % thin
+        if thin != 1:
+            raise LoggedError(log, "thin is not supported yet")
+        # TODO: looks like this thinning is not correctly account for weights???
         return pd.read_csv(
             inp, sep=" ", header=None, names=cols, comment="#", skipinitialspace=True,
             skiprows=skiprows, index_col=False)
@@ -290,10 +411,11 @@ def get_scipy_1d_pdf(info):
     param = list(info.keys())[0]
     info2 = deepcopy(info[param])
     if not info2:
-        raise LoggedError(log, "No specific prior info given for sampled parameter '%s'." % param)
+        raise LoggedError(log, "No specific prior info given for "
+                               "sampled parameter '%s'." % param)
     # What distribution?
     try:
-        dist = info2.pop(_p_dist).lower()
+        dist = info2.pop(partag.dist).lower()
     # Not specified: uniform by default
     except KeyError:
         dist = "uniform"
@@ -326,6 +448,10 @@ def get_scipy_1d_pdf(info):
                     limit, value, param)
         info2["loc"] = minmaxvalues["min"]
         info2["scale"] = minmaxvalues["max"] - minmaxvalues["min"]
+
+    for x in ["loc", "scale", "min", "max"]:
+        if isinstance(info2.get(x), six.string_types):
+            raise LoggedError(log, "%s should be a number (got '%s')", x, info2.get(x))
     # Check for improper priors
     if not np.all(np.isfinite([info2.get(x, 0) for x in ["loc", "scale", "min", "max"]])):
         raise LoggedError(log, "Improper prior for parameter '%s'.", param)
@@ -342,13 +468,16 @@ def get_scipy_1d_pdf(info):
 
 
 def _fast_uniform_logpdf(self, x):
+    # not normally used since uniform handled as special case
     """WARNING: logpdf(nan) = -inf"""
     if not hasattr(self, "_cobaya_mlogscale"):
         self._cobaya_mlogscale = -np.log(self.kwds["scale"])
         self._cobaya_max = self.kwds["loc"] + self.kwds["scale"]
-    x_ = np.array(x)
-    return np.where(np.logical_and(x_ >= self.kwds["loc"], x_ <= self._cobaya_max),
-                    self._cobaya_mlogscale, -np.inf)
+        self._cobaya_loc = self.kwds['loc']
+    if self._cobaya_loc <= x <= self._cobaya_max:
+        return self._cobaya_mlogscale
+    else:
+        return -np.inf
 
 
 def _fast_norm_logpdf(self, x):
@@ -455,7 +584,7 @@ def create_banner(msg, symbol="*", length=None):
     msg_clean = cleandoc(msg)
     if not length:
         length = max([len(line) for line in msg_clean.split("\n")])
-    return (symbol * length + "\n" + msg_clean + "\n" + symbol * length + "\n")
+    return symbol * length + "\n" + msg_clean + "\n" + symbol * length + "\n"
 
 
 def warn_deprecation_python2(logger=None):
@@ -475,7 +604,7 @@ def warn_deprecation_python2(logger=None):
 
 def warn_deprecation_version(logger=None):
     msg = """
-    You are using an archived version of Cobaya, which is no loger maintained.
+    You are using an archived version of Cobaya, which is no longer maintained.
     Unless intentionally doing so, please, update asap to the latest version
     (e.g. with ``pip install cobaya --upgrade``).
     """
@@ -516,7 +645,7 @@ def deepcopy_where_possible(base):
     compromise solution.
     """
     if isinstance(base, Mapping):
-        _copy = (base.__class__)()
+        _copy = base.__class__()
         for key, value in (base or {}).items():
             key_copy = deepcopy(key)
             _copy[key_copy] = deepcopy_where_possible(value)
@@ -526,3 +655,17 @@ def deepcopy_where_possible(base):
             return deepcopy(base)
         except:
             return base
+
+
+def get_class_methods(cls, not_base=None, start='get_', excludes=(), first='self'):
+    methods = {}
+    for k, v in inspect.getmembers(cls):
+        if k.startswith(start) and k not in excludes and \
+                (not_base is None or not hasattr(not_base, k)) and \
+                getfullargspec(v).args[:1] == [first]:
+            methods[k[len(start):]] = v
+    return methods
+
+
+def get_properties(cls):
+    return [k for k, v in inspect.getmembers(cls) if isinstance(v, property)]

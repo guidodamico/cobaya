@@ -16,8 +16,8 @@ import argparse
 
 # Local
 from cobaya.yaml import yaml_load_file, yaml_dump_file
-from cobaya.conventions import _output_prefix, _path_install, _yaml_extensions, _theory
-from cobaya.conventions import _sampler, _params, _likelihood
+from cobaya.conventions import _output_prefix, _path_install, _yaml_extensions
+from cobaya.conventions import kinds, _params
 from cobaya.input import get_used_modules, merge_info, update_info
 from cobaya.install import install as install_reqs
 from cobaya.grid_tools import batchjob
@@ -42,6 +42,11 @@ def getArgs(vals=None):
     parser.add_argument("--install-reqs-force", action="store_true", default=False,
                         help="Force re-installation of apparently installed modules.")
     return parser.parse_args(vals)
+
+
+def pathIsGrid(batchPath):
+    return os.path.exists(batchjob.grid_cache_file(batchPath)) or os.path.exists(
+        os.path.join(batchPath, 'config', 'config.ini'))
 
 
 def MakeGridScript():
@@ -71,7 +76,7 @@ def makeGrid(batchPath, settingName=None, settings=None, read_only=False,
             raise NotImplementedError("Using a python script is work in progress...")
             # In this case, info-as-dict would be passed
             # settings = __import__(settingName, fromlist=['dummy'])
-    batch = batchjob.batchJob(batchPath, settings.get("yaml_dir", None))
+    batch = batchjob.batchJob(batchPath)
     # batch.skip = settings.get("skip", False)
     batch.makeItems(settings, messages=not read_only)
     if read_only:
@@ -131,10 +136,10 @@ def makeGrid(batchPath, settingName=None, settings=None, read_only=False,
         # Covariance matrices
         # We try to find them now, instead of at run time, to check if correctly selected
         try:
-            sampler = list(info[_sampler])[0]
+            sampler = list(info[kinds.sampler])[0]
         except KeyError:
             raise ValueError("No sampler has been chosen")
-        if sampler == "mcmc" and info[_sampler][sampler].get("covmat", "auto"):
+        if sampler == "mcmc" and info[kinds.sampler][sampler].get("covmat", "auto"):
             modules_path = install_reqs_at or info.get(_path_install, None)
             if not modules_path:
                 raise ValueError("Cannot assign automatic covariance matrices because no "
@@ -147,20 +152,17 @@ def makeGrid(batchPath, settingName=None, settings=None, read_only=False,
             from itertools import chain
             like_params = set(chain(*[
                 list(like[_params])
-                for like in updated_info[_likelihood].values()]))
+                for like in updated_info[kinds.likelihood].values()]))
             params_info = {p: v for p, v in updated_info[_params].items()
                            if is_sampled_param(v) and p not in like_params}
             best_covmat = get_best_covmat(
                 os.path.abspath(modules_path),
-                params_info, updated_info[_likelihood])
-            info[_sampler][sampler]["covmat"] = os.path.join(
+                params_info, updated_info[kinds.likelihood])
+            info[kinds.sampler][sampler]["covmat"] = os.path.join(
                 best_covmat["folder"], best_covmat["name"])
         # Write the info for this job
-        try:
-            yaml_dump_file(jobItem.iniFile(), info, error_if_exists=True)
-        except IOError:
-            raise IOError("Can't write chain input file. Maybe the chain configuration "
-                          "files already exists?")
+        # Allow overwrite since often will want to regenerate grid with tweaks
+        yaml_dump_file(jobItem.iniFile(), info, error_if_exists=False)
 
         # Non-translated old code
         # if not start_at_bestfit:

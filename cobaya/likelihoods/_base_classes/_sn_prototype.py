@@ -128,7 +128,7 @@ class _sn_prototype(_DataSetLikelihood):
         self.pecz = ini.float('pecz', 0.001)
         cols = None
         self.has_third_var = False
-        data_file = os.path.join(self.path, ini.string("data_file"))
+        data_file = os.path.normpath(os.path.join(self.path, ini.string("data_file")))
         self.log.debug('Reading %s' % data_file)
         supernovae = {}
         self.names = []
@@ -238,10 +238,12 @@ class _sn_prototype(_DataSetLikelihood):
                     self.invcovs[i] = self.inverse_covariance_matrix(alpha, beta)
         elif not self.alphabeta_covmat:
             self.inverse_covariance_matrix()
+        # Set data type for aggregated chi2 (case sensitive)
+        self.type = "SN"
 
-    def add_theory(self):
+    def get_requirements(self):
         # State requisites to the theory code
-        self.theory.needs(**{"angular_diameter_distance": {"z": self.zcmb}})
+        return {"angular_diameter_distance": {"z": self.zcmb}}
 
     def _read_covmat(self, filename):
         cov = np.loadtxt(filename)

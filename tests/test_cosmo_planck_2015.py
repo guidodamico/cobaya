@@ -18,6 +18,9 @@ cmb_precision["camb"].update({
     "halofit_version": "takahashi",
     "bbn_predictor": "BBN_fitting_parthenope"
 })
+cmb_precision["classy"].update({
+    "non linear": "halofit",
+})
 
 # Derived parameters not understood by CLASS
 # https://wiki.cosmos.esa.int/planckpla2015/images/b/b9/Parameter_tag_definitions_2015.pdf
@@ -65,6 +68,7 @@ def test_planck_2015_l2_camb(modules):
     lik_name = "planck_2015_lensing_cmblikes"
     clik_name = "planck_2015_lensing"
     info_likelihood = {lik_name: lik_info_lensing[clik_name]}
+
     chi2_lensing_cmblikes = deepcopy(chi2_lensing)
     chi2_lensing_cmblikes[lik_name] = chi2_lensing[clik_name]
     info_theory = {"camb": {"extra_args": cmb_precision["camb"]}}

@@ -40,9 +40,6 @@ standard deviation, simply add the following likelihood, substituting ``mu_H0`` 
 
 """
 
-# Python 2/3 compatibility
-from __future__ import division
-
 # Global
 from scipy.stats import norm
 
@@ -54,9 +51,11 @@ class _H0_prototype(Likelihood):
 
     def initialize(self):
         self.norm = norm(loc=self.H0, scale=self.H0_std)
+        # Set data type for aggregated chi2 (case sensitive)
+        self.type = "H0"
 
-    def add_theory(self):
-        self.theory.needs(H0=None)
+    def get_requirements(self):
+        return {'H0': None}
 
     def logp(self, **params_values):
         H0_theory = self.theory.get_param("H0")

@@ -18,8 +18,8 @@ from collections import OrderedDict as odict
 # Local
 from cobaya.likelihood import Likelihood
 from cobaya.log import LoggedError
-from cobaya.mpi import get_mpi_size, get_mpi_comm, am_single_or_primary_process
-from cobaya.conventions import _likelihood, _params
+from cobaya.mpi import get_mpi_size, share_mpi, is_main_process
+from cobaya.conventions import kinds, _params
 from cobaya.conventions import _input_params_prefix, _output_params_prefix
 
 derived_suffix = "_derived"
@@ -30,7 +30,13 @@ class gaussian_mixture(Likelihood):
     Gaussian likelihood.
     """
 
-    def initialize(self):
+    def d(self):
+        """
+        Dimension of the input vector.
+        """
+        return len(self.input_params)
+
+    def initialize_with_params(self):
         """
         Initializes the gaussian distributions.
         """
@@ -49,7 +55,7 @@ class gaussian_mixture(Likelihood):
             if cov_dim != cov_dim_2:
                 raise LoggedError(
                     self.log, "The covariance matrix(/ces) do not appear to be square!\n"
-                    "Got %r", self.covs)
+                              "Got %r", self.covs)
             if mean_dim != cov_dim:
                 raise LoggedError(
                     self.log,
@@ -72,7 +78,8 @@ class gaussian_mixture(Likelihood):
                     self.log,
                     "The number of derived parameters must be equal to the dimensionality"
                     " times the number of modes, i.e. %d x %d = %d, but was given %d "
-                    "derived parameters.", self.d(), self.n_modes, self.d() * self.n_modes,
+                    "derived parameters.", self.d(), self.n_modes,
+                    self.d() * self.n_modes,
                     len(self.output_params))
             elif not self.derived and self.output_params:
                 raise LoggedError(
@@ -84,12 +91,13 @@ class gaussian_mixture(Likelihood):
         else:
             raise LoggedError(
                 self.log, "You must specify both a mean (or a list of them) and a "
-                "covariance matrix, or a list of them.")
+                          "covariance matrix, or a list of them.")
         self.gaussians = [multivariate_normal(mean=mean, cov=cov)
                           for mean, cov in zip(self.means, self.covs)]
         if self.weights:
             if not len(self.weights) == len(self.gaussians):
-                raise LoggedError(self.log, "There must be as many weights as components.")
+                raise LoggedError(self.log,
+                                  "There must be as many weights as components.")
             if not np.isclose(sum(self.weights), 1):
                 self.weights = self.weights / sum(self.weights)
                 self.log.warning(
@@ -114,7 +122,8 @@ class gaussian_mixture(Likelihood):
                 standard = np.linalg.inv(self.choleskyL[i]).dot((x - self.means[i]))
                 derived.update(dict(
                     [(p, v) for p, v in
-                     zip(list(self.output_params)[i * self.d():(i + 1) * self.d()], standard)]))
+                     zip(list(self.output_params)[i * self.d():(i + 1) * self.d()],
+                         standard)]))
         # Compute the likelihood and return
         return logsumexp([gauss.logpdf(x) for gauss in self.gaussians], b=self.weights)
 
@@ -181,7 +190,7 @@ def info_random_gaussian_mixture(
     If ``mpi_aware=True``, it draws the random stuff only once, and communicates it to
     the rest of the MPI processes.
     """
-    if am_single_or_primary_process() or not mpi_aware:
+    if is_main_process() or not mpi_aware:
         cov = random_cov(ranges, n_modes=n_modes,
                          O_std_min=O_std_min, O_std_max=O_std_max, mpi_warn=False)
         if n_modes == 1:
@@ -191,26 +200,26 @@ def info_random_gaussian_mixture(
         for i in range(n_modes):
             std = np.sqrt(cov[i].diagonal())
             factor = 3
-            ranges_mean = [[l[0] + factor * s, l[1] - +factor * s] for l, s in zip(ranges, std)]
+            ranges_mean = [[l[0] + factor * s, l[1] - +factor * s] for l, s in
+                           zip(ranges, std)]
             # If this implies min>max, take the centre
             ranges_mean = [
                 (l if l[0] <= l[1] else 2 * [(l[0] + l[1]) / 2]) for l in ranges_mean]
             mean[i] = random_mean(ranges_mean, n_modes=1, mpi_warn=False)
-    elif not am_single_or_primary_process() and mpi_aware:
-        mean, cov = None, None
     if mpi_aware:
-        mean, cov = get_mpi_comm().bcast(mean, root=0), get_mpi_comm().bcast(cov, root=0)
+        mean, cov = share_mpi((mean, cov) if is_main_process() else None)
     dimension = len(ranges)
-    info = {_likelihood: {"gaussian_mixture": {
+    info = {kinds.likelihood: {"gaussian_mixture": {
         "means": mean, "covs": cov, _input_params_prefix: input_params_prefix,
         _output_params_prefix: output_params_prefix, "derived": derived}}}
     info[_params] = odict(
         # sampled
-        [[input_params_prefix + "_%d" % i,
+        [(input_params_prefix + "_%d" % i,
           {"prior": {"min": ranges[i][0], "max": ranges[i][1]},
-           "latex": r"\alpha_{%i}" % i}]
+           "latex": r"\alpha_{%i}" % i})
          for i in range(dimension)] +
         # derived
-        ([[output_params_prefix + "_%d" % i, {"min": -3, "max": 3, "latex": r"\beta_{%i}" % i}]
+        ([[output_params_prefix + "_%d" % i,
+           {"min": -3, "max": 3, "latex": r"\beta_{%i}" % i}]
           for i in range(dimension * n_modes)] if derived else []))
     return info

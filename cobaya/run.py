@@ -14,23 +14,23 @@ from collections import OrderedDict as odict
 
 # Local
 from cobaya import __version__
-from cobaya.conventions import _likelihood, _prior, _params, _theory, _sampler
+from cobaya.conventions import kinds, _prior, _params
 from cobaya.conventions import _path_install, _debug, _debug_file, _output_prefix
-from cobaya.conventions import _resume, _timing, _debug_default, _force, _post
+from cobaya.conventions import _resume, _timing, _debug_default, _force, _post, _version
 from cobaya.conventions import _yaml_extensions, _separator_files, _updated_suffix
 from cobaya.conventions import _modules_path_arg, _modules_path_env, _resume_default
-from cobaya.output import get_Output as Output
+from cobaya.output import get_output
 from cobaya.model import Model
-from cobaya.sampler import get_sampler as Sampler
+from cobaya.sampler import get_sampler, get_sampler_class, Minimizer
 from cobaya.log import logger_setup
 from cobaya.yaml import yaml_dump
 from cobaya.input import update_info
-from cobaya.mpi import import_MPI, am_single_or_primary_process
-from cobaya.tools import warn_deprecation, deepcopy_where_possible
+from cobaya.mpi import import_MPI, is_main_process, set_mpi_disabled
+from cobaya.tools import warn_deprecation, recursive_update
 from cobaya.post import post
 
 
-def run(info):
+def run(info, stop_at_error=None):
     assert hasattr(info, "keys"), (
         "The first argument must be a dictionary with the info needed for the run. "
         "If you were trying to pass the name of an input file instead, "
@@ -38,51 +38,51 @@ def run(info):
         "or, if you were passing a yaml string, load it with 'cobaya.yaml.yaml_load'.")
     # Configure the logger ASAP
     # Just a dummy import before configuring the logger, until I fix root/individual level
+    # TODO: check getdist import
     import getdist
     logger_setup(info.get(_debug), info.get(_debug_file))
     import logging
+    info_stop = info.get("stop_at_error", False)
     # Initialize output, if required
     resume, force = info.get(_resume), info.get(_force)
-    ignore_blocks = []
-    # If minimizer, always try to re-use sample to get bestfit/covmat
-    if list(info[_sampler])[0] == "minimize":
-        resume = True
-        force = False
-    output = Output(output_prefix=info.get(_output_prefix),
-                    resume=resume, force_output=force)
     # Create the updated input information, including defaults for each module.
     updated_info = update_info(info)
+    # If minimizer, always try to re-use sample to get bestfit/covmat
+    if issubclass(get_sampler_class(updated_info) or type, Minimizer):
+        resume = True
+        force = False
+    output = get_output(output_prefix=info.get(_output_prefix),
+                        resume=resume, force_output=force)
     if output:
         updated_info[_output_prefix] = output.updated_output_prefix()
         updated_info[_resume] = output.is_resuming()
     if logging.root.getEffectiveLevel() <= logging.DEBUG:
         # Don't dump unless we are doing output, just in case something not serializable
         # May be fixed in the future if we find a way to serialize external functions
-        if info.get(_output_prefix) and am_single_or_primary_process():
+        if info.get(_output_prefix) and is_main_process():
             logging.getLogger(__name__.split(".")[-1]).info(
                 "Input info updated with defaults (dumped to YAML):\n%s",
                 yaml_dump(updated_info))
-    # TO BE DEPRECATED IN >1.2!!! #####################
-    _force_reproducible = "force_reproducible"
-    if _force_reproducible in info:
-        info.pop(_force_reproducible)
-        logging.getLogger(__name__.split(".")[-1]).warning(
-            "Option '%s' is no longer necessary. Please remove it!" % _force_reproducible)
-    # CHECK THAT THIS WARNING WORKS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    ###################################################
     # We dump the info now, before modules initialization, to better track errors and
     # to check if resuming is possible asap (old and new infos are consistent)
     output.dump_info(info, updated_info)
     # Initialize the posterior and the sampler
-    with Model(updated_info[_params], updated_info[_likelihood], updated_info.get(_prior),
-               updated_info.get(_theory), modules=info.get(_path_install),
-               timing=updated_info.get(_timing), allow_renames=False) as model:
-        # Update the updated info with the parameter routes
-        keys = ([_likelihood, _theory] if _theory in updated_info else [_likelihood])
-        updated_info.update(odict([[k, model.info()[k]] for k in keys]))
+    with Model(updated_info[_params], updated_info[kinds.likelihood],
+               updated_info.get(_prior), updated_info.get(kinds.theory),
+               path_install=info.get(_path_install), timing=updated_info.get(_timing),
+               allow_renames=False,
+               stop_at_error=info_stop if stop_at_error is None else stop_at_error) \
+            as model:
+        # Update the updated info with the parameter routes and version info
+        keys = ([kinds.likelihood, kinds.theory]
+                if kinds.theory in updated_info else [kinds.likelihood])
+        updated_info.update(odict([(k, model.info()[k]) for k in keys]))
+        updated_info = recursive_update(
+            updated_info, model.get_version(add_version_field=True))
         output.dump_info(None, updated_info, check_compatible=False)
-        with Sampler(
-                updated_info[_sampler], model, output, resume=updated_info.get(_resume),
+        with get_sampler(
+                updated_info[kinds.sampler], model, output,
+                resume=updated_info.get(_resume),
                 modules=info.get(_path_install)) as sampler:
             sampler.run()
     # For scripted calls:
@@ -116,8 +116,13 @@ def run_script():
                               help="Overwrites previous output, if it exists "
                                    "(use with care!)")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--no-mpi", action='store_true',
+                        help="disable MPI when mpi4py installed but MPI does "
+                             "not actually work")
     args = parser.parse_args()
-    if any([(os.path.splitext(f)[0] in ("input", "updated")) for f in args.input_file]):
+    if args.no_mpi:
+        set_mpi_disabled()
+    if any((os.path.splitext(f)[0] in ("input", "updated")) for f in args.input_file):
         raise ValueError("'input' and 'updated' are reserved file names. "
                          "Please, use a different one.")
     load_input = import_MPI(".input", "load_input")

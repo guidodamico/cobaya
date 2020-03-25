@@ -10,7 +10,7 @@ from getdist.mcsamples import MCSamplesFromCobaya
 from time import sleep
 from itertools import chain
 
-from cobaya.conventions import _likelihood, _sampler, _params, _output_prefix
+from cobaya.conventions import kinds, _params, _output_prefix
 from cobaya.conventions import _debug, _debug_file, _path_install
 from cobaya.likelihoods.gaussian_mixture import info_random_gaussian_mixture
 from cobaya.tools import KL_norm
@@ -45,13 +45,14 @@ def body_of_test(dimension=1, n_modes=1, info_sampler={}, tmpdir="", modules=Non
         print(info["likelihood"]["gaussian_mixture"]["means"])
         print("Original covmat of the gaussian mode:")
         print(info["likelihood"]["gaussian_mixture"]["covs"])
-    info[_sampler] = info_sampler
+    info[kinds.sampler] = info_sampler
     if list(info_sampler.keys())[0] == "mcmc":
         if "covmat" in info_sampler["mcmc"]:
-            info[_sampler]["mcmc"]["covmat_params"] = (
+            info[kinds.sampler]["mcmc"]["covmat_params"] = (
                 list(info["params"].keys())[:dimension])
     info[_debug] = False
     info[_debug_file] = None
+    # TODO: this looks weird/bug:?
     info[_output_prefix] = getattr(tmpdir, "realpath()", lambda: tmpdir)()
     if modules:
         info[_path_install] = process_modules_path(modules)
@@ -78,8 +79,8 @@ def body_of_test(dimension=1, n_modes=1, info_sampler={}, tmpdir="", modules=Non
             import getdist.plots as gdplots
             from getdist.gaussian_mixtures import MixtureND
             mixture = MixtureND(
-                info[_likelihood]["gaussian_mixture"]["means"],
-                info[_likelihood]["gaussian_mixture"]["covs"],
+                info[kinds.likelihood]["gaussian_mixture"]["means"],
+                info[kinds.likelihood]["gaussian_mixture"]["covs"],
                 names=[p for p in info[_params] if "deriv" not in p], label="truth")
             g = gdplots.getSubplotPlotter()
             to_plot = [mixture, results]
@@ -92,8 +93,8 @@ def body_of_test(dimension=1, n_modes=1, info_sampler={}, tmpdir="", modules=Non
         # 1st test: KL divergence
         if n_modes == 1:
             cov_sample, mean_sample = results.getCov(), results.getMeans()
-            KL_final = KL_norm(m1=info[_likelihood]["gaussian_mixture"]["means"][0],
-                               S1=info[_likelihood]["gaussian_mixture"]["covs"][0],
+            KL_final = KL_norm(m1=info[kinds.likelihood]["gaussian_mixture"]["means"][0],
+                               S1=info[kinds.likelihood]["gaussian_mixture"]["covs"][0],
                                m2=mean_sample[:dimension],
                                S2=cov_sample[:dimension, :dimension])
             print("Final KL: ", KL_final)
@@ -105,11 +106,13 @@ def body_of_test(dimension=1, n_modes=1, info_sampler={}, tmpdir="", modules=Non
                     "Not all clusters detected!")
                 for i, c2 in enumerate(clusters):
                     cov_c2, mean_c2 = c2.getCov(), c2.getMeans()
-                    KLs = [KL_norm(m1=info[_likelihood]["gaussian_mixture"]["means"][i_c1],
-                                   S1=info[_likelihood]["gaussian_mixture"]["covs"][i_c1],
-                                   m2=mean_c2[:dimension],
-                                   S2=cov_c2[:dimension, :dimension])
-                           for i_c1 in range(n_modes)]
+                    KLs = [
+                        KL_norm(
+                            m1=info[kinds.likelihood]["gaussian_mixture"]["means"][i_c1],
+                            S1=info[kinds.likelihood]["gaussian_mixture"]["covs"][i_c1],
+                            m2=mean_c2[:dimension],
+                            S2=cov_c2[:dimension, :dimension])
+                        for i_c1 in range(n_modes)]
                     extra_tol = 4 * n_modes if n_modes > 1 else 1
                     print("Final KL for cluster %d: %g", i, min(KLs))
                     assert min(KLs) <= KL_tolerance * extra_tol
@@ -131,13 +134,14 @@ def body_of_test_speeds(info_sampler={}, manual_blocking=False, modules=None):
     mean1, cov1 = [info_random_gaussian_mixture(
         ranges=[ranges[i] for i in range(dim)], n_modes=1, input_params_prefix=prefix,
         O_std_min=0.01, O_std_max=0.2, derived=True)
-                   [_likelihood]["gaussian_mixture"][p][0] for p in ["means", "covs"]]
+                   [kinds.likelihood]["gaussian_mixture"][p][0] for p in
+                   ["means", "covs"]]
     mean2, cov2 = [info_random_gaussian_mixture(
         ranges=[ranges[i] for i in range(dim, 2 * dim)], n_modes=1,
         input_params_prefix=prefix, O_std_min=0.01, O_std_max=0.2, derived=True)
-                   [_likelihood]["gaussian_mixture"][p][0] for p in ["means", "covs"]]
-    global n1, n2
-    n1, n2 = 0, 0
+                   [kinds.likelihood]["gaussian_mixture"][p][0] for p in
+                   ["means", "covs"]]
+    n = [0, 0]
     # PolyChord measures its own speeds, so we need to "sleep"
     sleep_unit = 1 / 50
     sampler = list(info_sampler.keys())[0]
@@ -145,8 +149,7 @@ def body_of_test_speeds(info_sampler={}, manual_blocking=False, modules=None):
     def like1(a_0, a_1, a_2, _derived=["sum_like1"]):
         if sampler == "polychord":
             sleep(1 / speed1 * sleep_unit)
-        global n1
-        n1 += 1
+        n[0] += 1
         if _derived is not None:
             _derived["sum_like1"] = a_0 + a_1 + a_2
         return multivariate_normal.logpdf([a_0, a_1, a_2], mean=mean1, cov=cov1)
@@ -154,8 +157,7 @@ def body_of_test_speeds(info_sampler={}, manual_blocking=False, modules=None):
     def like2(a_3, a_4, a_5, _derived=["sum_like2"]):
         if sampler == "polychord":
             sleep(1 / speed2 * sleep_unit)
-        global n2
-        n2 += 1
+        n[1] += 1
         if _derived is not None:
             _derived["sum_like2"] = a_3 + a_4 + a_5
         return multivariate_normal.logpdf([a_3, a_4, a_5], mean=mean2, cov=cov2)
@@ -164,12 +166,13 @@ def body_of_test_speeds(info_sampler={}, manual_blocking=False, modules=None):
     perm = list(range(2 * dim))
     shuffle(perm)
     # Create info
-    info = {"params":
-                odict([ [prefix + "%d" % i, {"prior": dict(zip(["min", "max"], ranges[i]))}]
-                          for i in perm] + [["sum_like1", None], ["sum_like2", None]]),
-            "likelihood": {"like1": {"external": like1, "speed": speed1},
-                           "like2": {"external": like2, "speed": speed2}}}
-    info["sampler"] = info_sampler
+    info = {"params": odict(
+        [(prefix + "%d" % i, {"prior": dict(zip(["min", "max"], ranges[i]))})
+         for i in perm] + [("sum_like1", None), ("sum_like2", None)]),
+        "likelihood": {"like1": {"external": like1, "speed": speed1},
+                       "like2": {"external": like2, "speed": speed2}},
+        "sampler": info_sampler}
+    info["sampler"][sampler]["measured_speeds"] = False
     if manual_blocking:
         info["sampler"][sampler]["blocking"] = [
             [speed1, ["a_0", "a_1", "a_2"]],
@@ -198,20 +201,20 @@ def body_of_test_speeds(info_sampler={}, manual_blocking=False, modules=None):
     # Done! --> Tests
     if sampler == "polychord":
         tolerance = 0.2
-        assert abs((n2 - n1) / (n1) / (speed2 / speed1) - 1) < tolerance, (
+        assert abs((n[1] - n[0]) / n[0] / (speed2 / speed1) - 1) < tolerance, (
                 "#evaluations off: %g > %g" % (
-            abs((n2 - n1) / (n1) / (speed2 / speed1) - 1), tolerance))
+            abs((n[1] - n[0]) / n[0] / (speed2 / speed1) - 1), tolerance))
     # For MCMC tests, notice that there is a certain tolerance to be allowed for,
     # since for every proposed step the BlockedProposer cycles once, but the likelihood
     # may is not evaluated if the proposed point falls outside the prior bounds
     elif sampler == "mcmc" and info["sampler"][sampler].get("drag"):
-        assert abs((n2 - n1) / (n1) / (speed2 / speed1) - 1) < 0.1
+        assert abs((n[1] - n[0]) / n[0] / (speed2 / speed1) - 1) < 0.1
     elif sampler == "mcmc" and info["sampler"][sampler].get("oversample"):
         # Testing oversampling: number of evaluations per param * oversampling factor
-        assert abs((n2 - n1) * dim / (n1 * dim) / (speed2 / speed1) - 1) < 0.1
+        assert abs((n[1] - n[0]) * dim / (n[0] * dim) / (speed2 / speed1) - 1) < 0.1
     elif sampler == "mcmc":
         # Testing just correct blocking: same number of evaluations per param
-        assert abs((n2 - n1) * dim / (n1 * dim) - 1) < 0.1
+        assert abs((n[1] - n[0]) * dim / (n[0] * dim) - 1) < 0.1
     # Finally, test some points of the chain to reproduce the correct likes and derived
     # These are not AssertionError's to override the flakyness of the test
     for _ in range(10):

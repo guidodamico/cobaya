@@ -8,23 +8,22 @@ r"""
 """
 
 # Python 2/3 compatibility
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import absolute_import, division, print_function
+import six
+if six.PY2:
+    from io import open
 
 # Global
 import os
 import sys
 import numpy as np
 import logging
-import textwrap
-import six
 
 # Local
 from cobaya.likelihood import Likelihood
 from cobaya.log import LoggedError
-from cobaya.conventions import _path_install, _likelihood
-from cobaya.input import get_default_info, HasDefaults
+from cobaya.conventions import _path_install, kinds
+from cobaya.input import get_default_info
 from cobaya.install import pip_install, download_file
 from cobaya.tools import are_different_params_lists, create_banner
 
@@ -44,14 +43,14 @@ except NameError:
     FileNotFoundError = OSError
 
 
-class _planck_clik_prototype(Likelihood, HasDefaults):
+class _planck_clik_prototype(Likelihood):
 
     def initialize(self):
-        if "2015" in self.name:
+        if "2015" in self.get_name():
             for line in _deprecation_msg_2015.split("\n"):
                 self.log.warning(line)
         code_path = common_path
-        data_path = get_data_path(self.__class__.get_module_name())
+        data_path = get_data_path(self.__class__.get_qualified_class_name())
         if self.path:
             has_clik = False
         else:
@@ -83,8 +82,8 @@ class _planck_clik_prototype(Likelihood, HasDefaults):
         # Differences in the wrapper for lensing and non-lensing likes
         self.lensing = clik.try_lensing(self.clik_file)
         try:
-            self.clik = (
-                clik.clik_lensing(self.clik_file) if self.lensing else clik.clik(self.clik_file))
+            self.clik = clik.clik_lensing(self.clik_file) if self.lensing \
+                else clik.clik(self.clik_file)
         except clik.lkl.CError:
             # Is it that the file was not found?
             if not os.path.exists(self.clik_file):
@@ -99,6 +98,11 @@ class _planck_clik_prototype(Likelihood, HasDefaults):
                            "initialization of incompatible likelihoods (e.g. polarised "
                            "vs non-polarised 'lite' likelihoods. See error info below:")
             raise
+        self.l_maxs = self.clik.get_lmax()
+        # Set data type for aggregated chi2 (case sensitive)
+        self.type = "CMB"
+
+    def initialize_with_params(self):
         # Check that the parameters are the right ones
         self.expected_params = list(self.clik.extra_parameter_names)
         differences = are_different_params_lists(
@@ -109,11 +113,10 @@ class _planck_clik_prototype(Likelihood, HasDefaults):
                           "If this has happened without you fiddling with the defaults, "
                           "please open an issue in GitHub.", differences)
         # Placeholder for vector passed to clik
-        self.l_maxs = self.clik.get_lmax()
         length = (len(self.l_maxs) if self.lensing else len(self.clik.get_has_cl()))
         self.vector = np.zeros(np.sum(self.l_maxs) + length + len(self.expected_params))
 
-    def add_theory(self):
+    def get_requirements(self):
         # State requisites to the theory code
         requested_cls = ["tt", "ee", "bb", "te", "tb", "eb"]
         if self.lensing:
@@ -123,11 +126,11 @@ class _planck_clik_prototype(Likelihood, HasDefaults):
             has_cl = self.clik.get_has_cl()
         self.requested_cls = [cl for cl, i in zip(requested_cls, has_cl) if int(i)]
         self.l_maxs_cls = [lmax for lmax, i in zip(self.l_maxs, has_cl) if int(i)]
-        self.theory.needs(Cl=dict(zip(self.requested_cls, self.l_maxs_cls)))
+        return {'Cl': dict(zip(self.requested_cls, self.l_maxs_cls))}
 
     def logp(self, **params_values):
         # get Cl's from the theory code
-        cl = self.theory.get_Cl()
+        cl = self.theory.get_Cl(units="muK2")
         # fill with Cl's
         self.vector[:-len(self.expected_params)] = np.concatenate(
             [(cl[spectrum][:1 + lmax] if spectrum not in ["tb", "eb"]
@@ -149,23 +152,24 @@ class _planck_clik_prototype(Likelihood, HasDefaults):
     @classmethod
     def is_installed(cls, **kwargs):
         code_path = common_path
-        data_path = get_data_path(cls.get_module_name())
+        data_path = get_data_path(cls.get_qualified_class_name())
         result = True
         if kwargs["code"]:
             result &= is_installed_clik(os.path.realpath(
                 os.path.join(kwargs["path"], "code", code_path)))
         if kwargs["data"]:
-            _, filename = get_product_id_and_clik_file(cls.get_module_name())
+            _, filename = get_product_id_and_clik_file(cls.get_qualified_class_name())
             result &= os.path.exists(os.path.realpath(
                 os.path.join(kwargs["path"], "data", data_path, filename)))
             # Check for additional data and covmats
-            from cobaya.likelihoods.planck_2018_lensing.native import native
+            from cobaya.likelihoods.planck_2018_lensing import native
             result &= native.is_installed(**kwargs)
         return result
 
     @classmethod
-    def install(cls, path=None, force=False, code=True, data=True, no_progress_bars=False):
-        name = cls.get_module_name()
+    def install(cls, path=None, force=False, code=True, data=True,
+                no_progress_bars=False):
+        name = cls.get_qualified_class_name()
         log = logging.getLogger(name)
         path_names = {"code": common_path, "data": get_data_path(name)}
         import platform
@@ -199,15 +203,17 @@ class _planck_clik_prototype(Likelihood, HasDefaults):
                 product_id, _ = get_product_id_and_clik_file(name)
                 # Download and decompress the particular likelihood
                 url = pla_url_prefix + product_id
-                # url = get_default_info(name, _likelihood)[_likelihood][name].get("url", url)
+
                 if not download_file(url, paths["data"], decompress=True,
                                      logger=log, no_progress_bars=no_progress_bars):
                     log.error("Not possible to download this likelihood.")
                     success = False
-                # Additional data and covmats, stored in same repo as the 2018 python lensing likelihood
-                from cobaya.likelihoods.planck_2018_lensing.native import native
+                # Additional data and covmats, stored in same repo as the
+                # 2018 python lensing likelihood
+                from cobaya.likelihoods.planck_2018_lensing import native
                 if not native.is_installed(data=True, path=path):
-                    success *= native.install(path=path, force=force, code=code, data=data,
+                    success *= native.install(path=path, force=force, code=code,
+                                              data=data,
                                               no_progress_bars=no_progress_bars)
         return success
 
@@ -256,7 +262,8 @@ def is_installed_clik(path, log_and_fail=False, import_it=True):
         clik_path = os.path.join(get_clik_source_folder(path), 'lib/python/site-packages')
     except FileNotFoundError:
         if log_and_fail:
-            raise LoggedError(log, "The given folder does not exist: '%s'", clik_path or path)
+            raise LoggedError(log, "The given folder does not exist: '%s'",
+                              clik_path or path)
         return False
     sys.path.insert(0, clik_path)
     try:
@@ -345,5 +352,5 @@ def install_clik(path, no_progress_bars=False):
 
 def get_product_id_and_clik_file(name):
     """Gets the PLA product info from the defaults file."""
-    defaults = get_default_info(name, _likelihood)[_likelihood][name]
+    defaults = get_default_info(name, kinds.likelihood)
     return defaults.get("product_id"), defaults.get("clik_file")

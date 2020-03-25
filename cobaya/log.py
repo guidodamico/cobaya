@@ -19,7 +19,8 @@ from copy import deepcopy
 
 # Local
 from cobaya.conventions import _debug, _debug_file
-from cobaya.mpi import get_mpi_rank, get_mpi_size, get_mpi_comm, more_than_one_process
+from cobaya.mpi import get_mpi_rank, get_mpi_size, get_mpi_comm, \
+    more_than_one_process, is_main_process
 
 
 class LoggedError(Exception):
@@ -27,6 +28,7 @@ class LoggedError(Exception):
     Dummy exception, to be raised when the originating exception
     has been cleanly handled and logged.
     """
+
     def __init__(self, logger, *args, **kwargs):
         if args:
             logger.error(*args, **kwargs)
@@ -34,6 +36,10 @@ class LoggedError(Exception):
         if msg and len(args) > 1:
             msg = msg % args[1:]
         super(LoggedError, self).__init__(msg, **kwargs)
+
+
+always_stop_exceptions = (LoggedError, KeyboardInterrupt, SystemExit, NameError,
+                          SyntaxError, AttributeError)
 
 
 def safe_exit():
@@ -125,12 +131,9 @@ class HasLogger(object):
     Has magic methods to ignore the logger at (de)serialization.
     """
 
-    def set_logger(self, lowercase=True):
-        module_name = getattr(
-            self.__class__, "get_module_name", lambda : self.__class__.__name__)()
-        self.log = logging.getLogger(
-            (lambda x: x.lower() if lowercase else x)(
-                getattr(self, "name", module_name)))
+    def set_logger(self, lowercase=True, name=None):
+        name = name or self.__class__.__name__
+        self.log = logging.getLogger(name.lower() if lowercase else name)
 
     # Copying and pickling
     def __deepcopy__(self, memo={}):
@@ -144,3 +147,11 @@ class HasLogger(object):
     def __setstate__(self, d):
         self.__dict__ = d
         self.set_logger()
+
+    def mpi_warning(self, msg, *args, **kwargs):
+        if is_main_process():
+            self.log.warning(msg, *args, **kwargs)
+
+    def mpi_info(self, msg, *args, **kwargs):
+        if is_main_process():
+            self.log.info(msg, *args, **kwargs)

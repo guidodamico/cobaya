@@ -8,25 +8,26 @@
 
 # Python 2/3 compatibility
 from __future__ import absolute_import, division
+import six
+if six.PY2:
+    from io import open
 
 # Global
 import os
 import sys
-import six
 import traceback
 import datetime
-from copy import deepcopy
 from itertools import chain
 import re
 
 # Local
 from cobaya.yaml import yaml_dump, yaml_load, yaml_load_file, OutputError
-from cobaya.conventions import _input_suffix, _updated_suffix, _separator_files
+from cobaya.conventions import _input_suffix, _updated_suffix, _separator_files, _version
 from cobaya.conventions import _resume, _resume_default, _force, _yaml_extensions
-from cobaya.conventions import _likelihood, _params, _sampler
+from cobaya.conventions import kinds, _params
 from cobaya.log import LoggedError, HasLogger
-from cobaya.input import is_equal_info
-from cobaya.mpi import am_single_or_primary_process, get_mpi_comm
+from cobaya.input import is_equal_info, get_class
+from cobaya.mpi import is_main_process, more_than_one_process, share_mpi
 from cobaya.collection import Collection
 from cobaya.tools import deepcopy_where_possible
 
@@ -35,9 +36,10 @@ re_uint = re.compile("[0-9]+")
 
 
 class Output(HasLogger):
-    def __init__(self, output_prefix=None, resume=_resume_default, force_output=False):
+    def __init__(self, output_prefix=None, resume=_resume_default,
+                 force_output=False, must_exist=False):
         self.name = "output"  # so that the MPI-wrapped class conserves the name
-        self.set_logger()
+        self.set_logger(self.name)
         self.folder = os.sep.join(output_prefix.split(os.sep)[:-1]) or "."
         self.prefix = (lambda x: x if x != "." else "")(output_prefix.split(os.sep)[-1])
         self.force_output = force_output
@@ -57,7 +59,7 @@ class Output(HasLogger):
                                        ["\n"] + ["-"] * 37))
                 raise LoggedError(
                     self.log, "Could not create folder '%s'. "
-                    "See traceback on top of this message.", self.folder)
+                              "See traceback on top of this message.", self.folder)
         self.log.info("Output to be read-from/written-into folder '%s', with prefix '%s'",
                       self.folder, self.prefix)
         # Prepare file names, and check if chain exists
@@ -66,13 +68,19 @@ class Output(HasLogger):
         self.file_input = info_file_prefix + _input_suffix + _yaml_extensions[0]
         self.file_updated = info_file_prefix + _updated_suffix + _yaml_extensions[0]
         self.resuming = False
+        # Output kind and collection extension
+        self.kind = "txt"
+        self.ext = "txt"
         if os.path.isfile(self.file_updated):
             self.log.info(
-                "Found existing products with the requested ouput prefix: '%s'",
+                "Found existing products with the requested output prefix: '%s'",
                 output_prefix)
-            if self.force_output:
+            if not must_exist and not self.find_collections():
+                self.log.info("Previous output empty, starting anew.")
+                self.delete_infos()
+            elif self.force_output:
                 self.log.info("Deleting previous chain ('force' was requested).")
-                [os.remove(f) for f in [self.file_input, self.file_updated]]
+                self.delete_infos()
             elif resume:
                 # Only in this case we can be sure that we are actually resuming
                 self.resuming = True
@@ -84,18 +92,20 @@ class Output(HasLogger):
                 same_prefix_noinfo = [f for f in os.listdir(self.folder) if
                                       f.startswith(self.prefix) and f not in info_files]
                 if not same_prefix_noinfo:
-                    [os.remove(f) for f in [self.file_input, self.file_updated]]
+                    self.delete_infos()
                     self.log.info("Overwritten old failed chain files.")
                 else:
                     raise LoggedError(
-                        self.log, "Delete the previous sample manually, automatically "
-                        "('-%s', '--%s', '%s: True')" % (
-                            _force[0], _force, _force) +
-                        " or request resuming ('-%s', '--%s', '%s: True')" % (
-                            _resume[0], _resume, _resume))
-        # Output kind and collection extension
-        self.kind = "txt"
-        self.ext = "txt"
+                        self.log, "Delete the previous output manually, automatically "
+                                  "('-%s', '--%s', '%s: True')" % (
+                                      _force[0], _force, _force) +
+                                  " or request resuming ('-%s', '--%s', '%s: True')" % (
+                                      _resume[0], _resume, _resume))
+
+    def delete_infos(self):
+        for f in [self.file_input, self.file_updated]:
+            if os.path.exists(f):
+                os.remove(f)
 
     def updated_output_prefix(self):
         """
@@ -115,11 +125,12 @@ class Output(HasLogger):
            - the input info.
            - idem, populated with the modules' defaults.
 
-        If resuming a sample, checks first that old and new infos are consistent.
+        If resuming a sample, checks first that old and new infos and versions are
+        consistent.
         """
         # trim known params of each likelihood: for internal use only
         updated_info_trimmed = deepcopy_where_possible(updated_info)
-        for lik_info in updated_info_trimmed.get(_likelihood, {}).values():
+        for lik_info in updated_info_trimmed.get(kinds.likelihood, {}).values():
             if hasattr(lik_info, "pop"):
                 lik_info.pop(_params, None)
         if check_compatible:
@@ -127,35 +138,59 @@ class Output(HasLogger):
                 # We will test the old info against the dumped+loaded new info.
                 # This is because we can't actually check if python objects do change
                 old_info = self.reload_updated_info()
+                if not old_info:
+                    raise LoggedError(self.log, "No old sample information: %s",
+                                      self.file_updated)
                 new_info = yaml_load(yaml_dump(updated_info_trimmed))
                 ignore_blocks = []
-                if list(new_info.get(_sampler, [None]))[0] == "minimize":
-                    ignore_blocks = [_sampler]
+                from cobaya.sampler import get_sampler_class, Minimizer
+                if issubclass(get_sampler_class(new_info) or type, Minimizer):
+                    ignore_blocks = [kinds.sampler]
                 if not is_equal_info(old_info, new_info, strict=False,
                                      ignore_blocks=ignore_blocks):
                     # HACK!!! NEEDS TO BE FIXED
-                    if list(updated_info.get(_sampler, [None]))[0] == "minimize":
+                    if issubclass(get_sampler_class(updated_info) or type, Minimizer):
+                        # TODO: says work in progress!
                         raise LoggedError(
                             self.log, "Old and new sample information not compatible! "
-                            "At this moment it is not possible to 'force' deletion of "
-                            "and old 'minimize' run. Please delete it by hand. "
-                            "We are working on fixing this very soon!")
+                                      "At this moment it is not possible to 'force' "
+                                      "deletion of and old 'minimize' run. Please delete "
+                                      "it by hand. "
+                                      "We are working on fixing this very soon!")
                     raise LoggedError(
                         self.log, "Old and new sample information not compatible! "
-                        "Resuming not possible!")
+                                  "Resuming not possible!")
+                # Deal with version comparison separately:
+                # - If not specified now, take the one used in resumed info
+                # - If specified both now and before, check new older than old one
+                for k in (kind for kind in kinds if kind in updated_info):
+                    for c in updated_info[k]:
+                        new_version = updated_info[k][c].get(_version)
+                        old_version = old_info[k][c].get(_version)
+                        if new_version is None:
+                            updated_info[k][c][_version] = old_version
+                            updated_info_trimmed[k][c][_version] = old_version
+                        elif old_version is not None:
+                            cls = get_class(c, k, None_if_not_found=True)
+                            if cls and cls.compare_versions(
+                                    old_version, new_version, equal=False):
+                                raise LoggedError(
+                                    self.log, "You have requested version %r for "
+                                              "%s:%s, but you are trying to resume a "
+                                              "sample that used a newer version: %r.",
+                                    new_version, k, c, old_version)
             except IOError:
                 # There was no previous chain
                 pass
         # We write the new one anyway (maybe updated debug, resuming...)
         for f, info in [(self.file_input, input_info),
                         (self.file_updated, updated_info_trimmed)]:
-            if not info:
-                pass
-            with open(f, "w") as f_out:
-                try:
-                    f_out.write(yaml_dump(info))
-                except OutputError as e:
-                    raise LoggedError(self.log, str(e))
+            if info:
+                with open(f, "w", encoding="utf-8") as f_out:
+                    try:
+                        f_out.write(yaml_dump(info))
+                    except OutputError as e:
+                        raise LoggedError(self.log, str(e))
 
     def prepare_collection(self, name=None, extension=None):
         """
@@ -166,9 +201,9 @@ class Output(HasLogger):
         field, making it simply ``[folder]/[prefix].[extension]``.
         """
         if name is None:
-            name = (datetime.datetime.now().isoformat()
-                        .replace("T", "").replace(":", "").replace(".", "").replace("-", "")[
-                    :(4 + 2 + 2) + (2 + 2 + 2 + 3)])  # up to ms
+            name = (datetime.datetime.now().isoformat().replace("T", "")
+                        .replace(":", "").replace(".", "")
+                        .replace("-", "")[:(4 + 2 + 2) + (2 + 2 + 2 + 3)])  # up to ms
         file_name = os.path.join(
             self.folder,
             self.prefix + ("." if self.prefix else "") + (name + "." if name else "") +
@@ -242,27 +277,26 @@ class Output_MPI(Output):
     """
 
     def __init__(self, *args, **kwargs):
-        to_broadcast = ("folder", "prefix", "kind", "ext", "resuming")
-        if am_single_or_primary_process():
+        if is_main_process():
             Output.__init__(self, *args, **kwargs)
-        else:
-            for var in to_broadcast:
-                setattr(self, var, None)
-        for var in to_broadcast:
-            setattr(self, var, get_mpi_comm().bcast(getattr(self, var), root=0))
+        if more_than_one_process():
+            to_broadcast = ("folder", "prefix", "kind", "ext", "resuming")
+            values = share_mpi([getattr(self, var) for var in to_broadcast]
+                               if is_main_process() else None)
+            for name, var in zip(to_broadcast, values):
+                setattr(self, name, var)
 
     def dump_info(self, *args, **kwargs):
-        if am_single_or_primary_process():
+        if is_main_process():
             Output.dump_info(self, *args, **kwargs)
 
 
-def get_Output(*args, **kwargs):
+def get_output(*args, **kwargs):
     """
     Auxiliary function to retrieve the output driver.
     """
     if kwargs.get("output_prefix"):
         from cobaya.mpi import import_MPI
-        Output = import_MPI(".output", "Output")
-        return Output(*args, **kwargs)
+        return import_MPI(".output", "Output")(*args, **kwargs)
     else:
         return OutputDummy(*args, **kwargs)

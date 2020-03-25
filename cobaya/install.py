@@ -16,17 +16,17 @@ import sys
 import subprocess
 import traceback
 import logging
-from importlib import import_module
 import shutil
 from six import string_types
 from pkg_resources import parse_version
 
 # Local
 from cobaya.log import logger_setup, LoggedError
-from cobaya.tools import get_class_module, create_banner, warn_deprecation, get_class
+from cobaya.tools import create_banner, warn_deprecation, get_class
 from cobaya.input import get_used_modules
-from cobaya.conventions import _package, _code, _data, _likelihood, _external, _force
+from cobaya.conventions import _module_path, _code, _data, _external, _force
 from cobaya.conventions import _modules_path_arg, _modules_path_env, _path_install
+from cobaya.mpi import set_mpi_disabled
 
 log = logging.getLogger(__name__.split(".")[-1])
 
@@ -37,7 +37,7 @@ def install(*infos, **kwargs):
     path = kwargs.get("path", ".")
     if not path:
         # See if we can get one (and only one) from infos
-        paths = set([p for p in [info.get(_path_install) for info in infos] if p])
+        paths = set(p for p in [info.get(_path_install) for info in infos] if p)
         if len(paths) == 1:
             path = paths[0]
         else:
@@ -63,31 +63,35 @@ def install(*infos, **kwargs):
     for kind, modules in get_used_modules(*infos).items():
         for module in modules:
             print(create_banner(kind + ":" + module, symbol="=", length=80))
-            if len([s for s in skip_list if s in module.lower()]):
+            if any(s in module.lower() for s in skip_list):
                 log.info("Skipping %s for test skip list %s" % (module, skip_list))
                 continue
-            module_folder = get_class_module(module, kind)
-            try:
-                imported_module = import_module(module_folder, package=_package)
-                imported_class = get_class(module, kind)
-                if len([s for s in skip_list if s in imported_class.__name__.lower()]):
-                    log.info("Skipping %s for test skip list %s" % (imported_class.__name__, skip_list))
-                    continue
-            except ImportError as e:
-                if kind == _likelihood:
-                    info = (next(info for info in infos if module in info.get(_likelihood, {}))[_likelihood][module]
-                           ) or {}
-                    if isinstance(info, string_types) or _external in info:
-                        log.warning("Module '%s' is a custom likelihood. "
-                                    "Nothing to do.\n", module)
-                    else:
-                        log.error("Module '%s' not recognized. [%s]\n" % (module, e))
-                        failed_modules += ["%s:%s" % (kind, module)]
+            info = (next(info for info in infos if module in
+                         info.get(kind, {}))[kind][module]) or {}
+            if isinstance(info, string_types) or _external in info:
+                log.warning("Module '%s' is a custom function. "
+                            "Nothing to do.\n", module)
                 continue
+
+            try:
+                imported_class, imported_module = \
+                    get_class(module, kind, module_path=info.pop(_module_path, None),
+                              return_module=True)
+            except ImportError as e:
+                log.error("Module '%s' not recognized. [%s]\n" % (module, e))
+                failed_modules += ["%s:%s" % (kind, module)]
+                continue
+            else:
+                if any(s in imported_class.__name__.lower() for s in skip_list):
+                    log.info(
+                        "Skipping %s for test skip list %s" % (imported_class.__name__,
+                                                               skip_list))
+                    continue
+
             is_installed = getattr(imported_class, "is_installed",
                                    getattr(imported_module, "is_installed", None))
             if is_installed is None:
-                log.info("Built-in module: nothing to do.\n")
+                log.info("Built-in module %s: nothing to do.\n" % imported_class.__name__)
                 continue
             if is_installed(path=abspath, **kwargs_install):
                 log.info("External module already installed.\n")
@@ -142,7 +146,7 @@ def download_file(filename, path, no_progress_bars=False, decompress=False, logg
         from wget import download, bar_thermometer
         wget_kwargs = {"out": path, "bar":
             (bar_thermometer if not no_progress_bars else None)}
-        filename = download(filename, **wget_kwargs)
+        filename = os.path.normpath(download(filename, **wget_kwargs))
         print("")
         log.info('Downloaded filename %s' % filename)
     except Exception as excpt:
@@ -227,7 +231,7 @@ def check_gcc_version(min_version="6.4", error_returns=None):
     except:
         return error_returns
     # Change in gcc >= 7: -dumpversion only dumps major version
-    if not "." in version:
+    if "." not in version:
         version = subprocess.check_output(
             "gcc -dumpfullversion", shell=True, stderr=subprocess.STDOUT).decode().strip()
     return parse_version(str(min_version)) <= parse_version(version)
@@ -236,54 +240,60 @@ def check_gcc_version(min_version="6.4", error_returns=None):
 # Command-line script ####################################################################
 
 def install_script():
-    from cobaya.mpi import am_single_or_primary_process
-    if am_single_or_primary_process():
-        warn_deprecation()
-        # Configure the logger ASAP
-        logger_setup()
-        log = logging.getLogger(__name__.split(".")[-1])
-        # Parse arguments
-        import argparse
-        parser = argparse.ArgumentParser(
-            description="Cobaya's installation tool for external modules.")
-        parser.add_argument("files", action="store", nargs="+", metavar="input_file.yaml",
-                            help="One or more input files "
-                                 "(or simply 'polychord', or 'cosmo' "
-                                 "for a basic collection of cosmological modules)")
-        default_modules_path = os.environ.get(_modules_path_env)
-        parser.add_argument("-" + _modules_path_arg[0], "--" + _modules_path_arg,
-                            action="store", nargs=1,
-                            required=not bool(default_modules_path),
-                            metavar="/modules/path", default=[default_modules_path],
-                            help="Desired path where to install external modules.")
-        parser.add_argument("-" + _force[0], "--" + _force, action="store_true",
-                            default=False,
-                            help="Force re-installation of apparently installed modules.")
-        parser.add_argument("--no-progress-bars", action="store_true", default=False,
-                            help="No progress bars shown. Shorter logs (used in Travis).")
-        parser.add_argument("--just-check", action="store_true", default=False,
-                            help="Just check whether modules are installed.")
-        group_just = parser.add_mutually_exclusive_group(required=False)
-        group_just.add_argument("-C", "--just-code", action="store_false", default=True,
-                                help="Install code of the modules.", dest=_data)
-        group_just.add_argument("-D", "--just-data", action="store_false", default=True,
-                                help="Install data of the modules.", dest=_code)
-        arguments = parser.parse_args()
-        if arguments.files == ["cosmo"]:
-            log.info("Installing cosmological modules (input files will be ignored)")
-            from cobaya.cosmo_input import install_basic
-            infos = [install_basic]
-        elif arguments.files == ["cosmo-tests"]:
-            log.info("Installing *tested* cosmological modules "
-                     "(input files will be ignored)")
-            from cobaya.cosmo_input import install_tests
-            infos = [install_tests]
-        elif arguments.files == ["polychord"]:
-            infos = [{"sampler": {"polychord": None}}]
-        else:
-            from cobaya.input import load_input
-            infos = [load_input(f) for f in arguments.files]
-        # Launch installer
-        install(*infos, path=getattr(arguments, _modules_path_arg)[0],
-                **{arg: getattr(arguments, arg)
-                   for arg in ["force", _code, _data, "no_progress_bars", "just_check"]})
+    set_mpi_disabled(True)
+    warn_deprecation()
+
+    # Parse arguments
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Cobaya's installation tool for external modules.")
+    parser.add_argument("files", action="store", nargs="+", metavar="input_file.yaml",
+                        help="One or more input files "
+                             "(or simply 'polychord', or 'cosmo' "
+                             "for a basic collection of cosmological modules)")
+    default_modules_path = os.environ.get(_modules_path_env)
+    parser.add_argument("-" + _modules_path_arg[0], "--" + _modules_path_arg,
+                        action="store", nargs=1,
+                        required=not bool(default_modules_path),
+                        metavar="/modules/path", default=[default_modules_path],
+                        help="Desired path where to install external modules.")
+    parser.add_argument("-" + _force[0], "--" + _force, action="store_true",
+                        default=False,
+                        help="Force re-installation of apparently installed modules.")
+    parser.add_argument("--no-progress-bars", action="store_true", default=False,
+                        help="No progress bars shown. Shorter logs (used in Travis).")
+    parser.add_argument("--just-check", action="store_true", default=False,
+                        help="Just check whether modules are installed.")
+    group_just = parser.add_mutually_exclusive_group(required=False)
+    group_just.add_argument("-C", "--just-code", action="store_false", default=True,
+                            help="Install code of the modules.", dest=_data)
+    group_just.add_argument("-D", "--just-data", action="store_false", default=True,
+                            help="Install data of the modules.", dest=_code)
+    arguments = parser.parse_args()
+
+    # Configure the logger ASAP
+    logger_setup()
+    log = logging.getLogger(__name__.split(".")[-1])
+
+    if arguments.files == ["cosmo"]:
+        log.info("Installing cosmological modules (input files will be ignored)")
+        from cobaya.cosmo_input import install_basic
+        infos = [install_basic]
+    elif arguments.files == ["cosmo-tests"]:
+        log.info("Installing *tested* cosmological modules "
+                 "(input files will be ignored)")
+        from cobaya.cosmo_input import install_tests
+        infos = [install_tests]
+    elif arguments.files == ["polychord"]:
+        infos = [{"sampler": {"polychord": None}}]
+    else:
+        from cobaya.input import load_input
+        infos = [load_input(f) for f in arguments.files]
+    # Launch installer
+    install(*infos, path=getattr(arguments, _modules_path_arg)[0],
+            **{arg: getattr(arguments, arg)
+               for arg in ["force", _code, _data, "no_progress_bars", "just_check"]})
+
+
+if __name__ == '__main__':
+    install_script()

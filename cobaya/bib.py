@@ -16,7 +16,7 @@ import os
 from collections import OrderedDict as odict
 
 # Local
-from cobaya.conventions import _yaml_extensions, _kinds
+from cobaya.conventions import _yaml_extensions, kinds
 from cobaya.tools import create_banner, warn_deprecation
 from cobaya.input import load_input, get_used_modules, get_class
 
@@ -28,12 +28,7 @@ _default_length = 80
 def get_bib_module(module, kind):
     cls = get_class(module, kind, None_if_not_found=True)
     if cls:
-        filename = cls.get_bibtex_file()
-        if filename:
-            with open(filename, "r") as f:
-                lines = "".join(f.readlines())
-        else:
-            lines = "[no bibliography information found]"
+        lines = cls.get_bibtex() or "[no bibliography information found]"
     else:
         lines = "[Module '%s.%s' not known.]" % (kind, module)
     return lines + "\n"
@@ -59,8 +54,8 @@ def prettyprint_bib(blocks_text):
 
 # Command-line script
 def bib_script():
-    from cobaya.mpi import am_single_or_primary_process
-    if not am_single_or_primary_process():
+    from cobaya.mpi import is_main_process
+    if not is_main_process():
         return
     warn_deprecation()
     # Parse arguments and launch
@@ -75,7 +70,7 @@ def bib_script():
                         nargs=1, default=None, metavar="module_kind",
                         help=("If module name given, "
                               "kind of module whose bib is requested: " +
-                              ", ".join(['%s' % kind for kind in _kinds]) + ". " +
+                              ", ".join(['%s' % kind for kind in kinds]) + ". " +
                               "Use only when module name is not unique (it would fail)."))
     arguments = parser.parse_args()
     # Case of files
