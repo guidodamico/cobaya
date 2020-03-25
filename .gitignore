@@ -7,6 +7,7 @@
 .directory
 
 # Python and packaging
+*.npz
 *.pyc
 *.egg-info/
 build/
