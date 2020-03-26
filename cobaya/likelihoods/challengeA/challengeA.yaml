@@ -1,6 +1,6 @@
-path: '/hpc/home/guido.damico/cobaya/pybird'
+path: '/Users/guido/github/cobaya/pybird'
 
-data_directory: '/hpc/home/guido.damico/cobaya/data'
+data_directory: '/Users/guido/github/cobaya/data'
 data_file: 'pybird/DataSims/ps1D_Challenge_A.dat'
 covmat_file: 'pybird/Covariance/CovChallengeA.dat'
 

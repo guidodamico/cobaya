@@ -3,8 +3,6 @@ import os
 import numpy as np
 import scipy.constants as conts
 from cobaya.likelihood import Likelihood
-from cobaya.mpi import get_mpi_size, get_mpi_comm, am_single_or_primary_process
-from cobaya.conventions import _likelihood, _params
 from cobaya.conventions import _input_params_prefix, _output_params_prefix
 try:
     from . import pybird as pb
@@ -209,12 +207,15 @@ class challengeA(Likelihood_eft):
         """
          returns a dictionary specifying quantities calculated by a theory code are needed
         """
-        needs = {'output': 'mPk', 'z_max_pk': self.z, 'P_k_max_h/Mpc': 1.,
-                 "Pk_interpolator": {"z": self.z, "nonlinear": False,
-                                     "vars_pairs": [["delta_tot", "delta_tot"]]}}
+        needs = {"H0": None,
+                "Pk_interpolator": {
+                    "z": self.z, "k_max": 1.,
+                    "vars_pairs": [["delta_tot", "delta_tot"]]},
+                "angular_diameter_distance": {"z": [0., self.z]},
+                "Hubble": {"z": [0., self.z]}}
         return needs
 
-    def logp(self, params_values):
+    def logp(self, **params_values):
         """
         Taking a dictionary of (sampled) nuisance parameter values params_values
         and return a log-likelihood.
@@ -238,16 +239,16 @@ class challengeA(Likelihood_eft):
         bs = [b1, b2, b3, b4, b5 / self.knl**2, b6 / self.km**2, 0.]
 
         if self.birdlkl is 'fastmarg' or self.birdlkl is 'fastfull':
-            Pk_interpolators = self.theory.get_Pk_interpolator()
-            PKdelta = Pk_interpolators["delta_tot_delta_tot"]
-            hpar = self.theory.get_param('h')
+            PKdelta = self.theory.get_Pk_interpolator(("delta_tot", "delta_tot"))
+            hpar = self.theory.get_param("H0") / 100.
             plin = [PKdelta.P(self.z, ki * hpar) * hpar**3 for ki in self.kin]
+            print("Plin", plin)
             # GDA check units
-            DA = self.theory.get_angular_diameter_distance(self.z) * self.theory.get_H(0.)
-            H = self.theory.get_H(self.z) / self.theory.get_H(0.)
-            f = self.theory.get_scale_independent_growth_factor_f(self.z)
-
-            self.bird = pb.Bird(self.kin, plin, f, DA, H, self.z, which='all', co=self.co)
+            Da = self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0.)
+            H = self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.)
+            #f = self.theory.get_scale_independent_growth_factor_f(self.z)
+            f = self.theory.get_omega
+            self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)
             self.nonlinear.PsCf(self.bird)
             self.bird.setPsCfl()
             self.resum.Ps(self.bird)
