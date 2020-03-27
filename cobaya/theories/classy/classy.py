@@ -247,6 +247,12 @@ class classy(BoltzmannBase):
                     args=[np.atleast_1d(v["z"])],
                     args_names=["z"],
                     arg_array=0)
+            elif k == "fgrowth":
+                self.collectors[k] = Collector(
+                    method="scale_independent_growth_factor_f",
+                    args=[np.atleast_1d(v["z"])],
+                    args_names=["z"],
+                    arg_array=0)
             elif k == "comoving_radial_distance":
                 self.collectors[k] = Collector(
                     method="z_of_r",

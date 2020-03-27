@@ -204,6 +204,15 @@ class BoltzmannBase(Theory):
         """
         return self._get_z_dependent("angular_diameter_distance", z)
 
+    def get_fgrowth(self, z):
+        r"""
+        Returns the logarithmic growth factor f.
+
+        The redshifts must be a subset of those requested when :func:`~BoltzmannBase.needs`
+        was called.
+        """
+        return self._get_z_dependent("fgrowth", z)
+
     def get_comoving_radial_distance(self, z):
         r"""
         Returns the comoving radial distance to the given redshifts in Mpc.
@@ -235,7 +244,7 @@ class BoltzmannBase(Theory):
                                   "not specified in requirements")
             raise LoggedError(self.log, "Matter power %s, %s not computed" % var_pair)
 
-    def get_Pk_interpolator(self, var_pair=("delta_tot", "delta_tot"), nonlinear=True,
+    def get_Pk_interpolator(self, var_pair=("delta_tot", "delta_tot"), nonlinear=False,
                             extrap_kmax=None):
         """
         Get P(z,k) bicubic interpolation object (:class:`PowerSpectrumInterpolator`).

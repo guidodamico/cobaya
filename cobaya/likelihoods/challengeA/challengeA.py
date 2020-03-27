@@ -209,10 +209,11 @@ class challengeA(Likelihood_eft):
         """
         needs = {"H0": None,
                 "Pk_interpolator": {
-                    "z": self.z, "k_max": 1.,
+                    "z": [0, 0.1, self.z], "k_max": 1.1, "nonlinear": False,
                     "vars_pairs": [["delta_tot", "delta_tot"]]},
                 "angular_diameter_distance": {"z": [0., self.z]},
-                "Hubble": {"z": [0., self.z]}}
+                "Hubble": {"z": [0., self.z]},
+                "fgrowth": {"z": [0., self.z]}}
         return needs
 
     def logp(self, **params_values):
@@ -239,15 +240,19 @@ class challengeA(Likelihood_eft):
         bs = [b1, b2, b3, b4, b5 / self.knl**2, b6 / self.km**2, 0.]
 
         if self.birdlkl is 'fastmarg' or self.birdlkl is 'fastfull':
-            PKdelta = self.theory.get_Pk_interpolator(("delta_tot", "delta_tot"))
+            # GDA check units
+            PKdelta = self.theory.get_Pk_interpolator(("delta_tot", "delta_tot"), extrap_kmax=1.)
             hpar = self.theory.get_param("H0") / 100.
             plin = [PKdelta.P(self.z, ki * hpar) * hpar**3 for ki in self.kin]
-            print("Plin", plin)
-            # GDA check units
-            Da = self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0.)
-            H = self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.)
-            #f = self.theory.get_scale_independent_growth_factor_f(self.z)
-            f = self.theory.get_omega
+            Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0.))[0]
+            H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
+            f = self.theory.get_fgrowth(self.z)
+            #f = self.theory.get_fsigma8(self.z)
+            #f = self.theory.get_Hubble(self.z)[0]
+            print("Did I get Da? ", Da)
+            print("Did I get H? ", H)
+            print("Did I get f? ", f)
+            # print("This is Plin: ", plin)
             self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)
             self.nonlinear.PsCf(self.bird)
             self.bird.setPsCfl()
