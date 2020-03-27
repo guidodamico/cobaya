@@ -30,7 +30,7 @@ theory:
   classy:
     speed: 0.2
     stop_at_error: false
-    version: null
+    version: v2.9.2
     path: null
     extra_args:
       N_ur: 3.046
@@ -60,6 +60,15 @@ theory:
       helium_delta_redshift: helium_fullreio_width
       yhe: YHe
       yheused: YHe
+    input_params:
+    - A_s
+    - n_s
+    - H0
+    - omega_b
+    - omega_cdm
+    output_params:
+    - Omega_m
+    - Omega_Lambda
 likelihood:
   challengeA:
     speed: 1
@@ -87,6 +96,18 @@ likelihood:
     window_configspace_file: window_BOSS_CMASS_NGC_z057.dat
     fibcol_window: false
     binning: false
+    input_params:
+    - b1
+    - c2
+    - b3
+    - c4
+    - b5
+    - b6
+    - b7
+    - b8
+    - b9
+    - b10
+    output_params: []
 params:
   logA:
     prior:

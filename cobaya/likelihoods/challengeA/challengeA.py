@@ -208,12 +208,13 @@ class challengeA(Likelihood_eft):
          returns a dictionary specifying quantities calculated by a theory code are needed
         """
         needs = {"H0": None,
+                "Omega_m": None,
                 "Pk_interpolator": {
                     "z": [0, 0.1, self.z], "k_max": 1.1, "nonlinear": False,
                     "vars_pairs": [["delta_tot", "delta_tot"]]},
                 "angular_diameter_distance": {"z": [0., self.z]},
-                "Hubble": {"z": [0., self.z]},
-                "fgrowth": {"z": [0., self.z]}}
+                "Hubble": {"z": [0., self.z]}}
+                #"fgrowth": {"z": [0., self.z]}}
         return needs
 
     def logp(self, **params_values):
@@ -246,12 +247,12 @@ class challengeA(Likelihood_eft):
             plin = [PKdelta.P(self.z, ki * hpar) * hpar**3 for ki in self.kin]
             Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0.))[0]
             H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
-            f = self.theory.get_fgrowth(self.z)
-            #f = self.theory.get_fsigma8(self.z)
-            #f = self.theory.get_Hubble(self.z)[0]
-            print("Did I get Da? ", Da)
-            print("Did I get H? ", H)
-            print("Did I get f? ", f)
+            #f = self.theory.get_fgrowth(self.z)
+            # Stupid approximation for f... Not really ideal
+            f = (self.theory.get_param("Omega_m") * (1+self.z)**3 / H**2)**(0.55)
+            # print("Did I get Da? ", Da)
+            # print("Did I get H? ", H)
+            # print("Did I get f? ", f)
             # print("This is Plin: ", plin)
             self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)
             self.nonlinear.PsCf(self.bird)
