@@ -59,7 +59,7 @@ class Likelihood_eft(Likelihood):
         self.chi2data = np.dot(self.ydata, np.dot(self.invcov, self.ydata))
         self.invcovdata = np.dot(self.ydata, self.invcov)
 
-        self.kin = np.logspace(-5, 0, 200)
+        # self.kin = np.logspace(-5, 0, 200)
 
         try:
             # GDA Explain something here?
@@ -208,13 +208,14 @@ class challengeA(Likelihood_eft):
          returns a dictionary specifying quantities calculated by a theory code are needed
         """
         needs = {"H0": None,
-                "Omega_m": None,
-                "Pk_interpolator": {
-                    "z": [0, 0.1, self.z], "k_max": 1.1, "nonlinear": False,
-                    "vars_pairs": [["delta_tot", "delta_tot"]]},
+                "omegam": None,
+                "omega_b": None,
+                "Pk_grid": {
+                    "z": self.z, "k_max": 1.1, "nonlinear": False,
+                    "vars_pairs": [("delta_tot", "delta_tot")]},
                 "angular_diameter_distance": {"z": [0., self.z]},
-                "Hubble": {"z": [0., self.z]}}
-                #"fgrowth": {"z": [0., self.z]}}
+                "Hubble": {"z": [0., self.z], "units": '1/Mpc'}}
+                #"fsigma8": {"z": [0., self.z]}}
         return needs
 
     def logp(self, **params_values):
@@ -241,17 +242,19 @@ class challengeA(Likelihood_eft):
         bs = [b1, b2, b3, b4, b5 / self.knl**2, b6 / self.km**2, 0.]
 
         if self.birdlkl is 'fastmarg' or self.birdlkl is 'fastfull':
-            # GDA check units
-            PKdelta = self.theory.get_Pk_interpolator(("delta_tot", "delta_tot"), extrap_kmax=1.)
+            # This is a tuple (k, z, PK), where k and z are arrays, and PK[i,j] is the value at z[i], k[j]
+            self.kin, dummy, plin = self.theory.get_Pk_grid(("delta_tot", "delta_tot"))
             hpar = self.theory.get_param("H0") / 100.
-            plin = [PKdelta.P(self.z, ki * hpar) * hpar**3 for ki in self.kin]
-            Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0.))[0]
+            #print(dummy) # This is weird, it is now an array, first entry is 1+z...
+            #print(plin.shape)
+            plin = plin[0] * hpar**3  # Change units to h^3/Mpc^3
+            Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0., units="1/Mpc"))[0]
             H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
-            #f = self.theory.get_fgrowth(self.z)
+            #f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]
             # Stupid approximation for f... Not really ideal
-            f = (self.theory.get_param("Omega_m") * (1+self.z)**3 / H**2)**(0.55)
-            # print("Did I get Da? ", Da)
-            # print("Did I get H? ", H)
+            f = (self.theory.get_param("omegam") * (1+self.z)**3 / H**2)**(0.55)
+            #print("Did I get Da? ", Da)
+            #print("Did I get H? ", H)
             # print("Did I get f? ", f)
             # print("This is Plin: ", plin)
             self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)

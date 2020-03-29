@@ -61,7 +61,7 @@ params:
   omegamh2:
     derived: 'lambda Omega_m, H0: Omega_m*(H0/100)**2'
     latex: \Omega_\mathrm{m} h^2
-  omega_DE:
+  omega_de:
     latex: \Omega_\Lambda
   YHe:
     latex: Y_\mathrm{P}

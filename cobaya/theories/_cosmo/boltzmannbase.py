@@ -204,15 +204,6 @@ class BoltzmannBase(Theory):
         """
         return self._get_z_dependent("angular_diameter_distance", z)
 
-    def get_fgrowth(self, z):
-        r"""
-        Returns the logarithmic growth factor f.
-
-        The redshifts must be a subset of those requested when :func:`~BoltzmannBase.needs`
-        was called.
-        """
-        return self._get_z_dependent("fgrowth", z)
-
     def get_comoving_radial_distance(self, z):
         r"""
         Returns the comoving radial distance to the given redshifts in Mpc.
@@ -222,7 +213,7 @@ class BoltzmannBase(Theory):
         """
         return self._get_z_dependent("comoving_radial_distance", z)
 
-    def get_Pk_grid(self, var_pair=("delta_tot", "delta_tot"), nonlinear=True):
+    def get_Pk_grid(self, var_pair=("delta_tot", "delta_tot"), nonlinear=False):
         """
         Get  matter power spectrum, e.g. suitable for splining.
         Returned arrays may be bigger or more densely sampled than requested, but will
@@ -274,6 +265,7 @@ class BoltzmannBase(Theory):
             raise LoggedError(self.log,
                               'Cannot do log extrapolation with zero-crossing pk '
                               'for %s, %s' % var_pair)
+        print("Entering the PS interpolator")
         result = PowerSpectrumInterpolator(z, k, pk, logP=log_p, logsign=sign,
                                            extrap_kmax=extrap_kmax)
         self._current_state[key] = result
@@ -327,9 +319,11 @@ class PowerSpectrumInterpolator(RectBivariateSpline):
     """
 
     def __init__(self, z, k, P_or_logP, extrap_kmax=None, logP=False, logsign=1):
+        print("I entered the PS interpolator")
         self.islog = logP
         #  Check order
         z, k = (np.atleast_1d(x) for x in [z, k])
+        # print("I managed to check z, k")
         if len(z) < 3:
             raise ValueError('Require at least three redshifts for interpolation')
         i_z = np.argsort(z)
@@ -339,6 +333,7 @@ class PowerSpectrumInterpolator(RectBivariateSpline):
         self.zmin, self.zmax = self.z[0], self.z[-1]
         self.kmin, self.kmax = self.k[0], self.k[-1]
         logk = np.log(self.k)
+        # print("I got logk")
         # Continue until extrap_kmax using a (log,log)-linear extrapolation
         if extrap_kmax and extrap_kmax > self.kmax:
             if not logP:
@@ -355,7 +350,12 @@ class PowerSpectrumInterpolator(RectBivariateSpline):
             self.kmax = extrap_kmax  # Added for consistency with CAMB
 
             P_or_logP = logPnew
-
+        # print("I finished inizialization")
+        # print("redshift", repr(self.z))
+        # print("logk", repr(logk))
+        # print("P_or_logP", repr(P_or_logP))
+        # import pickle
+        # pickle.dump((self.z, logk, P_or_logP), open("tuple_z_logk_P.pkl", 'wb'))
         super(self.__class__, self).__init__(self.z, logk, P_or_logP)
 
     def P(self, z, k, grid=None):

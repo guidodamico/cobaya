@@ -52,8 +52,8 @@ theory:
     - omch2
     output_params:
     - omegam
+    - omega_de
     - YHe
-    - omega_DE
     - Omega_m
 likelihood:
   challengeA:
@@ -160,15 +160,17 @@ params:
   omegamh2:
     derived: 'lambda Omega_m, H0: Omega_m*(H0/100)**2'
     latex: \Omega_\mathrm{m} h^2
-  omega_DE:
+  omega_de:
     latex: \Omega_\Lambda
     derived: true
+    renames:
+    - omegal
   YHe:
     latex: Y_\mathrm{P}
     derived: true
     renames:
-    - yheused
     - yhe
+    - yheused
   b1:
     prior:
       dist: uniform

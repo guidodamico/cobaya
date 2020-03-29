@@ -87,7 +87,7 @@ params:
   #mnu:
   #  derived: 'lambda m_ncdm: 3 * m_ncdm'
   #  latex: \sum m_\nu
-  omega_DE:
+  omega_de:
     latex: \Omega_\Lambda
   YHe:
     latex: Y_\mathrm{P}
