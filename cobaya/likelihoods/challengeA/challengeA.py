@@ -3,9 +3,9 @@ import os
 import numpy as np
 import scipy.constants as conts
 from cobaya.likelihood import Likelihood
-from cobaya.conventions import _input_params_prefix, _output_params_prefix
+# from cobaya.conventions import _input_params_prefix, _output_params_prefix
 try:
-    from . import pybird as pb
+    from pybird import pybird as pb
 except ImportError:
     raise Exception('Cannot find pybird library')
 
@@ -209,7 +209,7 @@ class challengeA(Likelihood_eft):
         """
         needs = {"H0": None,
                 "omegam": None,
-                "omega_b": None,
+                "omegabh2": None,
                 "Pk_grid": {
                     "z": self.z, "k_max": 1.1, "nonlinear": False,
                     "vars_pairs": [("delta_tot", "delta_tot")]},
@@ -250,8 +250,8 @@ class challengeA(Likelihood_eft):
             plin = plin[0] * hpar**3  # Change units to h^3/Mpc^3
             Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0., units="1/Mpc"))[0]
             H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
-            #f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]
-            # Stupid approximation for f... Not really ideal
+            # f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]
+            # Approximation for f... Not really ideal
             f = (self.theory.get_param("omegam") * (1+self.z)**3 / H**2)**(0.55)
             #print("Did I get Da? ", Da)
             #print("Did I get H? ", H)
@@ -322,7 +322,7 @@ class challengeA(Likelihood_eft):
                 prior += -0.5 * ((b9 / self.nd / self.km**2 / self.priors[4])**2)  # ce,l0
 
         if self.use_BBNprior:
-            prior += -0.5 * ((self.theory.get_param('omega_b') - self.omega_b_BBNcenter) / self.omega_b_BBNsigma)**2
+            prior += -0.5 * ((self.theory.get_param('omegabh2') - self.omega_b_BBNcenter) / self.omega_b_BBNsigma)**2
 
         lkl = - 0.5 * chi2 + prior
 

@@ -169,8 +169,8 @@ params:
     latex: Y_\mathrm{P}
     derived: true
     renames:
-    - yhe
     - yheused
+    - yhe
   b1:
     prior:
       dist: uniform
@@ -209,7 +209,7 @@ params:
     value: 0
   b10:
     value: 0
-output: camb
+output: challengeA
 modules: null
 debug: true
 resume: false

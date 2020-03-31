@@ -1,29 +1,6 @@
 likelihood:
   challengeA:
     stop_at_error: True
-    # params:
-    #   b1:
-    #     prior:
-    #       dist: uniform
-    #       min: 0.
-    #       max: 4.
-    #     ref:
-    #       dist: norm
-    #       loc: 2.
-    #       scale: 0.5
-    #     proposal: 2.
-    #     latex: b_{1, hN}
-    #   c2:
-    #     prior:
-    #       dist: uniform
-    #       min: -4.
-    #       max: 4.
-    #     ref:
-    #       dist: norm
-    #       loc: 1.5
-    #       scale: 0.5
-    #     proposal: 1.5
-    #     latex: c_{2, hN}
 params:
   logA:
     prior:
