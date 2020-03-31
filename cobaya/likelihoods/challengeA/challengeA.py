@@ -242,21 +242,16 @@ class challengeA(Likelihood_eft):
         bs = [b1, b2, b3, b4, b5 / self.knl**2, b6 / self.km**2, 0.]
 
         if self.birdlkl is 'fastmarg' or self.birdlkl is 'fastfull':
+            #TODO Here there should be: if cosmo.update()
             # This is a tuple (k, z, PK), where k and z are arrays, and PK[i,j] is the value at z[i], k[j]
             self.kin, dummy, plin = self.theory.get_Pk_grid(("delta_tot", "delta_tot"))
             hpar = self.theory.get_param("H0") / 100.
-            #print(dummy) # This is weird, it is now an array, first entry is 1+z...
-            #print(plin.shape)
             plin = plin[0] * hpar**3  # Change units to h^3/Mpc^3
             Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0., units="1/Mpc"))[0]
             H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
-            # f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]
+            # f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]  # Doesn't work
             # Approximation for f... Not really ideal
             f = (self.theory.get_param("omegam") * (1+self.z)**3 / H**2)**(0.55)
-            #print("Did I get Da? ", Da)
-            #print("Did I get H? ", H)
-            # print("Did I get f? ", f)
-            # print("This is Plin: ", plin)
             self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)
             self.nonlinear.PsCf(self.bird)
             self.bird.setPsCfl()
@@ -270,7 +265,8 @@ class challengeA(Likelihood_eft):
                 self.projection.kbinning(self.bird)
             else:
                 self.projection.kdata(self.bird)
-
+            
+            #TODO Here else: pass, the following is fast and should be always done
             self.bird.setreducePslb(bs)
 
             if self.birdlkl is 'fastmarg':
