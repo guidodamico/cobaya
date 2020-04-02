@@ -12,7 +12,7 @@ params:
       scale: 0.001
     proposal: 0.001
     latex: \log(10^{10} A_\mathrm{s})
-    drop: true
+    drop: True
   As:
     value: 'lambda logA: 1e-10*np.exp(logA)'
     latex: A_\mathrm{s}
@@ -64,7 +64,7 @@ params:
   #mnu:
   #  derived: 'lambda m_ncdm: 3 * m_ncdm'
   #  latex: \sum m_\nu
-  omega_de:
+  omegal:
     latex: \Omega_\Lambda
   YHe:
     latex: Y_\mathrm{P}
@@ -72,7 +72,7 @@ sampler:
   mcmc:
     covmat: auto
 theory:
-  camb:
+  classy:
     extra_args:
-      nnu: 3.046
-      #N_ur: 3.046
+      #nnu: 3.046
+      N_ur: 3.046

@@ -211,23 +211,6 @@ class challengeA(Likelihood_eft):
         """
         self.thecache = deque(maxlen=n)
 
-    def get_requirements(self):
-        """
-         returns a dictionary specifying quantities calculated by a theory code are needed
-        """
-        needs = {"H0": None,
-                "omegam": None,
-                "omegabh2": None,
-                "ns": None,
-                "As": None,
-                "Pk_grid": {
-                    "z": self.z, "k_max": 1.1, "nonlinear": False,
-                    "vars_pairs": [("delta_tot", "delta_tot")]},
-                "angular_diameter_distance": {"z": [0., self.z]},
-                "Hubble": {"z": [0., self.z], "units": '1/Mpc'}}
-                #"fsigma8": {"z": [0., self.z]}}
-        return needs
-    
     def cache_or_compute(self, **params_values):
         """
         Takes a dictionary of parameter values and computes the products needed by the
@@ -235,8 +218,9 @@ class challengeA(Likelihood_eft):
         If want_derived, the derived parameters are saved in the computed state
         (retrieved using get_current_derived()).
         """
-        mypars = tuple([self.theory.get_param(par) for par in
-        ["As", "H0", "omegach2", "omegabh2", "ns"]])
+        mypars = (self.theory.get_param(par) for par in
+        ("logA", "H0", "omegach2", "omegabh2", "ns"))
+        
         cached = False
         for mycache in self.thecache:
             if mypars in mycache.keys():
@@ -270,6 +254,23 @@ class challengeA(Likelihood_eft):
             # make this state the current one
             self.thecache.appendleft({mypars: self.bird})
         return self.bird
+
+    def get_requirements(self):
+        """
+         returns a dictionary specifying quantities calculated by a theory code are needed
+        """
+        needs = {"H0": None,
+                "omegam": None,
+                "omegabh2": None,
+                "ns": None,
+                "As": None,
+                "Pk_grid": {
+                    "z": self.z, "k_max": 1.1, "nonlinear": False,
+                    "vars_pairs": [("delta_tot", "delta_tot")]},
+                "angular_diameter_distance": {"z": [0., self.z]},
+                "Hubble": {"z": [0., self.z], "units": '1/Mpc'}}
+                #"fsigma8": {"z": [0., self.z]}}
+        return needs
 
     def logp(self, **params_values):
         """

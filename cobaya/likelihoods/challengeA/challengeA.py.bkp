@@ -2,7 +2,6 @@ from __future__ import print_function
 import os
 import numpy as np
 import scipy.constants as conts
-from collections import deque
 from cobaya.likelihood import Likelihood
 # from cobaya.conventions import _input_params_prefix, _output_params_prefix
 try:
@@ -202,14 +201,7 @@ class challengeA(Likelihood_eft):
                                         binning=self.binning, fibcol=self.fibcol_window, co=self.co)
 
         self.bird = None
-        self.init_cache()
         print("-- bird loaded --")
-    
-    def init_cache(self, n=5):
-        """
-        Set how many states to cache
-        """
-        self.thecache = deque(maxlen=n)
 
     def get_requirements(self):
         """
@@ -218,8 +210,6 @@ class challengeA(Likelihood_eft):
         needs = {"H0": None,
                 "omegam": None,
                 "omegabh2": None,
-                "ns": None,
-                "As": None,
                 "Pk_grid": {
                     "z": self.z, "k_max": 1.1, "nonlinear": False,
                     "vars_pairs": [("delta_tot", "delta_tot")]},
@@ -227,25 +217,33 @@ class challengeA(Likelihood_eft):
                 "Hubble": {"z": [0., self.z], "units": '1/Mpc'}}
                 #"fsigma8": {"z": [0., self.z]}}
         return needs
-    
-    def cache_or_compute(self, **params_values):
+
+    def logp(self, **params_values):
         """
-        Takes a dictionary of parameter values and computes the products needed by the
-        likelihood, or uses the cached value if that exists for these parameters.
-        If want_derived, the derived parameters are saved in the computed state
-        (retrieved using get_current_derived()).
+        Taking a dictionary of (sampled) nuisance parameter values params_values
+        and return a log-likelihood.
+
         """
-        mypars = tuple([self.theory.get_param(par) for par in
-        ["As", "H0", "omegach2", "omegabh2", "ns"]])
-        cached = False
-        for mycache in self.thecache:
-            if mypars in mycache.keys():
-                self.log.debug("Re-using computed results for likelihood")
-                self.bird = mycache[mypars]
-                cached = True
-                break
-        if not cached:
-            self.log.debug("Computing new state for likelihood")
+        # Prepare the vector of sampled parameter values
+        # print("p dict: ", params_values)
+        # Fill the derived parameters
+        b1 = params_values['b1']
+        c2 = params_values['c2']
+        b3 = params_values['b3']
+        c4 = params_values['c4']
+        b5 = params_values['b5']
+        b6 = params_values['b6']
+        b8 = params_values['b8']
+        b9 = params_values['b9']
+        b10 = params_values['b10']
+
+        b2 = (c2 + c4) / np.sqrt(2.)
+        b4 = (c2 - c4) / np.sqrt(2.)
+        bs = [b1, b2, b3, b4, b5 / self.knl**2, b6 / self.km**2, 0.]
+
+        if self.birdlkl is 'fastmarg' or self.birdlkl is 'fastfull':
+            #TODO Here there should be: if cosmo.update()
+            # This is a tuple (k, z, PK), where k and z are arrays, and PK[i,j] is the value at z[i], k[j]
             self.kin, dummy, plin = self.theory.get_Pk_grid(("delta_tot", "delta_tot"))
             hpar = self.theory.get_param("H0") / 100.
             plin = plin[0] * hpar**3  # Change units to h^3/Mpc^3
@@ -267,59 +265,7 @@ class challengeA(Likelihood_eft):
                 self.projection.kbinning(self.bird)
             else:
                 self.projection.kdata(self.bird)
-            # make this state the current one
-            self.thecache.appendleft({mypars: self.bird})
-        return self.bird
-
-    def logp(self, **params_values):
-        """
-        Taking a dictionary of (sampled) nuisance parameter values params_values
-        and return a log-likelihood.
-        """
-        # Prepare the vector of sampled parameter values
-        # print("p dict: ", params_values)
-        # Fill the derived parameters
-        b1 = params_values['b1']
-        c2 = params_values['c2']
-        b3 = params_values['b3']
-        c4 = params_values['c4']
-        b5 = params_values['b5']
-        b6 = params_values['b6']
-        b8 = params_values['b8']
-        b9 = params_values['b9']
-        b10 = params_values['b10']
-
-        b2 = (c2 + c4) / np.sqrt(2.)
-        b4 = (c2 - c4) / np.sqrt(2.)
-        bs = [b1, b2, b3, b4, b5 / self.knl**2, b6 / self.km**2, 0.]
-
-        # Build dict for caching
-
-        if self.birdlkl is 'fastmarg' or self.birdlkl is 'fastfull':
-            #TODO Here there should be: if cosmo.update()
-            # This is a tuple (k, z, PK), where k and z are arrays, and PK[i,j] is the value at z[i], k[j]
-            # self.kin, dummy, plin = self.theory.get_Pk_grid(("delta_tot", "delta_tot"))
-            # hpar = self.theory.get_param("H0") / 100.
-            # plin = plin[0] * hpar**3  # Change units to h^3/Mpc^3
-            # Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0., units="1/Mpc"))[0]
-            # H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
-            # # f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]  # Doesn't work
-            # # Approximation for f... Not really ideal
-            # f = (self.theory.get_param("omegam") * (1+self.z)**3 / H**2)**(0.55)
-            # self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)
-            # self.nonlinear.PsCf(self.bird)
-            # self.bird.setPsCfl()
-            # self.resum.Ps(self.bird)
-            # self.projection.AP(self.bird)
-            # if self.use_window is True:
-            #     self.projection.Window(self.bird)
-            # if self.fibcol_window:
-            #     self.projection.fibcolWindow(self.bird)
-            # if self.binning:
-            #     self.projection.kbinning(self.bird)
-            # else:
-            #     self.projection.kdata(self.bird)
-            self.bird = self.cache_or_compute(**params_values)
+            
             #TODO Here else: pass, the following is fast and should be always done
             self.bird.setreducePslb(bs)
 
