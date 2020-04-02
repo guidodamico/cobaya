@@ -1,6 +1,6 @@
 likelihood:
   challengeA:
-    stop_at_error: true
+    stop_at_error: True
 params:
   logA:
     prior:
@@ -36,7 +36,7 @@ params:
       scale: 2
     proposal: 2
     latex: H_0
-  ombh2:
+  omegabh2:
     prior:
       min: 0.005
       max: 0.1
@@ -46,7 +46,7 @@ params:
       scale: 0.0001
     proposal: 0.0001
     latex: \Omega_\mathrm{b} h^2
-  omch2:
+  omegach2:
     prior:
       min: 0.001
       max: 0.99
@@ -59,8 +59,11 @@ params:
   omegam:
     latex: \Omega_\mathrm{m}
   omegamh2:
-    derived: 'lambda Omega_m, H0: Omega_m*(H0/100)**2'
+    derived: 'lambda omegam, H0: omegam*(H0/100)**2'
     latex: \Omega_\mathrm{m} h^2
+  #mnu:
+  #  derived: 'lambda m_ncdm: 3 * m_ncdm'
+  #  latex: \sum m_\nu
   omega_de:
     latex: \Omega_\Lambda
   YHe:
@@ -72,8 +75,4 @@ theory:
   camb:
     extra_args:
       nnu: 3.046
-output: chains/challengeA
-modules: null
-debug: true
-resume: false
-force: true
+      #N_ur: 3.046
