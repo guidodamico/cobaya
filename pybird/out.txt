@@ -1,0 +1,2 @@
+ 2020-04-07 10:34:02,505 [tools] *ERROR* There was a problem when importing likelihood 'challengeA':
+ 2020-04-07 10:34:02,506 [input] *ERROR* Failed to get defaults for module or class 'challengeA' [invalid syntax (challengeA.py, line 228)]

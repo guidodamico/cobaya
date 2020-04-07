@@ -220,12 +220,13 @@ class challengeA(Likelihood_eft):
                 "omegabh2": None,
                 "ns": None,
                 "As": None,
+                "CAMBdata": None,
                 "Pk_grid": {
                     "z": self.z, "k_max": 1.1, "nonlinear": False,
                     "vars_pairs": [("delta_tot", "delta_tot")]},
                 "angular_diameter_distance": {"z": [0., self.z]},
-                "Hubble": {"z": [0., self.z], "units": '1/Mpc'}}
-                #"fsigma8": {"z": [0., self.z]}}
+                "Hubble": {"z": [0., self.z], "units": '1/Mpc'},
+                "fsigma8": {"z": [0., self.z]}}
         return needs
     
     def cache_or_compute(self, **params_values):
@@ -251,9 +252,10 @@ class challengeA(Likelihood_eft):
             plin = plin[0] * hpar**3  # Change units to h^3/Mpc^3
             Da = (self.theory.get_angular_diameter_distance(self.z) * self.theory.get_Hubble(0., units="1/Mpc"))[0]
             H = (self.theory.get_Hubble(self.z) / self.theory.get_Hubble(0.))[0]
-            # f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_sigma8(self.z)[0]  # Doesn't work
+            f = self.theory.get_fsigma8(self.z)[0] / self.theory.get_CAMBdata().get_sigma8()[0]
             # Approximation for f... Not really ideal
-            f = (self.theory.get_param("omegam") * (1+self.z)**3 / H**2)**(0.55)
+            # f = (self.theory.get_param("omegam") * (1+self.z)**3 / H**2)**(0.55)
+            # print("the 2 f's: ", f1, f)
             self.bird = pb.Bird(self.kin, plin, f, Da, H, self.z, which='all', co=self.co)
             self.nonlinear.PsCf(self.bird)
             self.bird.setPsCfl()

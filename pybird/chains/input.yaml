@@ -1,6 +1,6 @@
 likelihood:
   challengeA:
-    stop_at_error: True
+    stop_at_error: true
 params:
   logA:
     prior:
@@ -12,7 +12,7 @@ params:
       scale: 0.001
     proposal: 0.001
     latex: \log(10^{10} A_\mathrm{s})
-    drop: True
+    drop: true
   As:
     value: 'lambda logA: 1e-10*np.exp(logA)'
     latex: A_\mathrm{s}
@@ -61,9 +61,6 @@ params:
   omegamh2:
     derived: 'lambda omegam, H0: omegam*(H0/100)**2'
     latex: \Omega_\mathrm{m} h^2
-  #mnu:
-  #  derived: 'lambda m_ncdm: 3 * m_ncdm'
-  #  latex: \sum m_\nu
   omegal:
     latex: \Omega_\Lambda
   YHe:
@@ -75,4 +72,8 @@ theory:
   camb:
     extra_args:
       nnu: 3.046
-      #N_ur: 3.046
+output: chains/
+modules: null
+debug: true
+resume: false
+force: true
